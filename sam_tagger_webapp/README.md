@@ -318,6 +318,7 @@ It contains all the columns of your original CSV plus:
 | `track_key_sam` | The track this row belongs to. |
 | `tag_color`, `tag_number` | The final color name and number for the image. |
 | `tag_color_source`, `tag_number_source` | `track` (inherited from the whole track) or `image` (this image's own override). Empty = not tagged. |
+| *your own classes* | Click **⚙ Classes** in the palette to rename the color/number output columns, hide them, or add any number of extra *choice* classes (e.g. `has_pollen`: Yes/No) and *number* classes (e.g. `pollen_count`). Each is tagged from the palette (and the right-click menus) and exported as `<column>` plus `<column>_source`. |
 | `tag_rotation` | Degrees clockwise from the Rotation tab (empty if not set). |
 | `pred_color`, `pred_color_conf`, `pred_number`, `pred_number_conf` | The model's prediction and confidence, if you ran inference. |
 

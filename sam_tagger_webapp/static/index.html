@@ -41,6 +41,11 @@ select,.btn,input[type=search],input[type=text],input[type=number]{background:va
 .numctl{display:inline-flex;align-items:center;gap:6px}
 .numctl input{width:96px;text-align:center;font-weight:700}
 .hint{font-size:12px;color:var(--dim)}
+.clab{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
+.xline{display:flex;gap:4px;flex-wrap:wrap;padding:0 9px 6px}.xl{font-size:12px;background:var(--bg);border-radius:999px;padding:1px 8px}
+.cls{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.cls .r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cls .r input[type=text]{flex:1;min-width:120px}.cls .r input[type=number]{width:80px}
+.cls input[type=color]{width:34px;height:28px;border:0;background:none;padding:0;cursor:pointer}
 .chip{padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;cursor:pointer;font-size:13px;color:var(--dim)}
 .chip.on{background:var(--panel2);color:var(--text);border-color:var(--accent)}
 .chip .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:var(--c)}
@@ -150,10 +155,10 @@ svg .bar{cursor:pointer}
   <div class="row" id="tagFilterRow">
     <div id="chips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     <select id="fnMode" title="Number filter"><option value="any">Number: any</option><option value="has">Has number</option><option value="none">No number</option><option value="eq">Number =</option></select>
-    <input type="number" id="fnVal" min="1" max="100" style="width:70px;display:none">
+    <input type="number" id="fnVal" min="1" max="100" style="width:70px;display:none"><span id="xFilters" style="display:contents"></span>
     <div class="spacer"></div>
     <input type="search" id="search" placeholder="Search track…" style="width:160px">
-    <label class="dim">after tagging <select id="adv"><option value="both">next when color+number set</option><option value="any">next after any tag</option><option value="off">stay</option></select></label>
+    <label class="dim">after tagging <select id="adv"><option value="both">next when all classes set</option><option value="any">next after any tag</option><option value="off">stay</option></select></label>
     <label class="dim">thumbnail <select id="thumbMode" title="Which image represents a track in the gallery (Shift+scroll over a card to flip through its images)"><option value="mid">middle image</option><option value="first">first image</option></select></label>
     <label class="dim">size <input type="range" id="size" min="100" max="380" value="170"></label>
   </div>
@@ -183,6 +188,7 @@ const S = { ds:null, tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{},
   tab:'tag', view:'gallery', open:null, sel:new Set(), anchor:null, fc:'all', fn:{mode:'any',val:null}, q:'',
   undo:[], visible:[], inf:{filter:'review', thr:100, sort:'conf', job:null},
   dist:{unit:'images', colors:new Set(), nlo:null, nhi:null},
+  classes:[], xf:{},
   thumb:{mode:localStorage.getItem('thumbMode') || 'mid', at:{}} };   // gallery thumbnail: default image per track + per-track scrub position
 const NUMMAX = 100;
 const KEYS = ['q','w','e','r','t','y','u','i','o','p'];
@@ -205,6 +211,7 @@ const pct = x => Math.round(x*100) + '%';
 /* ---------- boot / datasets ---------- */
 async function boot(){
   S.tags = await api('/api/tags');
+  S.classes = await api('/api/classes');
   await refreshDatasets();
 }
 async function refreshDatasets(select){
@@ -265,6 +272,29 @@ async function openModal(onPick){
 const trackL = k => S.labels.tracks[k] || {};
 const effC = (f,k) => S.labels.images[f]?.c ?? S.labels.tracks[k]?.c ?? null;
 const effN = (f,k) => S.labels.images[f]?.n ?? S.labels.tracks[k]?.n ?? null;
+// label classes (see /api/classes): built-in 'c' (color tags) and 'n' (number) plus user-defined extras
+const cls = id => S.classes.find(c => c.id === id);
+const clsOn = id => cls(id)?.enabled !== false;
+const extraCls = () => S.classes.filter(c => !c.builtin && c.enabled !== false);
+const effX = (id,f,k) => S.labels.images[f]?.[id] ?? S.labels.tracks[k]?.[id] ?? null;
+function xVal(c, v){
+  if (v === null || v === undefined) return '';
+  if (c.type === 'number') return `<span class="xl">${esc(c.name)}: <b>${esc(v)}</b></span>`;
+  const o = c.options.find(o => o.id === v);
+  return `<span class="pill" style="--c:${o ? o.color : '#444'}"><i></i>${esc(c.name)}: ${esc(o ? o.name : v)}</span>`;
+}
+const xLine = get => { const h = extraCls().map(c => xVal(c, get(c.id))).join(''); return h ? `<div class="xline">${h}</div>` : ''; };
+function parseX(c, v){
+  const n = parseFloat(v);
+  if (!(n >= c.min && n <= c.max)) { toast(`${c.name} must be ${c.min}–${c.max}`); return undefined; }
+  return n;
+}
+function setXNumber(id, v){ if (v === '') return; const n = parseX(cls(id), v); if (n !== undefined) setField(id, n); }
+// context-menu entries for the extra classes; apply(id, value|null) writes one field
+const classItems = (apply, img) => extraCls().flatMap(c => ['hr', ...(c.type === 'number'
+  ? [{label:`${c.name}…`, fn:() => { const v = prompt(`${c.name} (${c.min}–${c.max}); leave empty to clear`); if (v === null) return;
+       if (v.trim() === '') return apply(c.id, null); const n = parseX(c, v); if (n !== undefined) apply(c.id, n); }}]
+  : c.options.map(o => ({label:`${c.name}: ${o.name}`, color:o.color, fn:() => apply(c.id, o.id)})).concat({label:img ? `${c.name}: use track value` : `Clear ${c.name}`, fn:() => apply(c.id, null)}))]);
 function mergeLocal(ch){
   const inv = {tracks:{}, images:{}};
   for (const kind of ['tracks','images']) for (const [k,patch] of Object.entries(ch[kind]||{})) {
@@ -292,7 +322,7 @@ function setPatch(patch, advance){
     applyLabels(ch);
     if (keys.length === 1) {
       const k = keys[0], mode = $('#adv').value, tl = trackL(k);
-      if (advance || mode === 'any' || (mode === 'both' && tl.c && tl.n)) {
+      if (advance || mode === 'any' || (mode === 'both' && S.classes.every(c => c.enabled === false || tl[c.id] != null))) {
         const vis = S.visible, i = vis.findIndex(t => t.key === k);
         if (i >= 0 && i < vis.length-1) { S.sel = new Set([vis[i+1].key]); S.anchor = vis[i+1].key; }
       }
@@ -351,6 +381,12 @@ function visibleTracks(){
     if (!inf) {
       if (S.fc === '__none' && l.c) return false;
       if (S.fc !== 'all' && S.fc !== '__none' && l.c !== S.fc) return false;
+      for (const c of extraCls()) {
+        const f = S.xf[c.id], v = l[c.id];
+        if (f === '__unset' && v != null) return false;
+        if (f === '__set' && v == null) return false;
+        if (f && f !== '__unset' && f !== '__set' && v !== f) return false;
+      }
       const m = S.fn.mode;
       if (m === 'has' && !l.n) return false;
       if (m === 'none' && l.n) return false;
@@ -400,18 +436,29 @@ function render(){
   window.scrollTo(0, y);
 }
 function renderPalette(){
-  const tab = S.tab, TK = tagKeys();
-  $('#palette').innerHTML = S.tags.map((t,i) =>
+  const tab = S.tab, TK = tagKeys(), cOn = clsOn('c'), nOn = clsOn('n'), ex = extraCls();
+  const lab = c => (cOn + nOn + ex.length) > 1 ? `<span class="clab">${esc(c.name)}</span>` : '';
+  let h = '';
+  if (cOn) h += lab(cls('c')) + S.tags.map((t,i) =>
     `<button class="tagbtn" data-id="${t.id}" style="--c:${t.color}"><span class="dot"></span>${esc(t.name)}${TK[t.id]?`<kbd>${esc(TK[t.id].toUpperCase())}</kbd>`:''}</button>`).join('')
-    + `<button class="tagbtn clear" data-clear="c">✕ Color</button><button class="tagbtn add" data-add>+ tag</button><span class="sep"></span>`
-    + `<span class="numctl"><input type="number" id="numin" min="1" max="${NUMMAX}" placeholder="1–${NUMMAX}" title="Type a number, Enter to apply"><button class="btn" data-numgo>Set #</button><button class="btn" data-numgrid>Grid</button><button class="btn ghost" data-clear="n">✕ #</button></span>`
-    + `<span class="hint">${S.view==='track' ? 'Tags apply to the <b>whole track</b> · right-click an image for just that image' : 'Select a track · type <b>color letter + number</b> then <b>Enter</b> (e.g. Q12⏎ = first tag, 12) · double-click opens a track'}</span>`;
+    + `<button class="tagbtn clear" data-clear="c">✕ Color</button><button class="tagbtn add" data-add>+ tag</button>`;
+  if (cOn && nOn) h += `<span class="sep"></span>`;
+  if (nOn) h += lab(cls('n')) + `<span class="numctl"><input type="number" id="numin" min="1" max="${NUMMAX}" placeholder="1–${NUMMAX}" title="Type a number, Enter to apply"><button class="btn" data-numgo>Set #</button><button class="btn" data-numgrid>Grid</button><button class="btn ghost" data-clear="n">✕ #</button></span>`;
+  for (const c of ex) h += `<span class="sep"></span>` + lab(c) + (c.type === 'number'
+    ? `<span class="numctl"><input type="number" data-xin="${c.id}" min="${c.min}" max="${c.max}" placeholder="${c.min}–${c.max}"><button class="btn" data-xgo="${c.id}">Set</button><button class="btn ghost" data-x="${c.id}" data-o="">✕</button></span>`
+    : c.options.map(o => `<button class="tagbtn" data-x="${c.id}" data-o="${esc(o.id)}" style="--c:${o.color}"><span class="dot"></span>${esc(o.name)}</button>`).join('')
+      + `<button class="tagbtn clear" data-x="${c.id}" data-o="">✕</button>`);
+  $('#palette').innerHTML = h + `<span class="sep"></span><button class="btn sm ghost" data-classes title="Add label classes and choose their output column names">⚙ Classes</button>`
+    + `<span class="hint">${S.view==='track' ? 'Tags apply to the <b>whole track</b> · right-click an image for just that image' : (cOn && nOn ? 'Select a track · type <b>color letter + number</b> then <b>Enter</b> (e.g. Q12⏎ = first tag, 12) · double-click opens a track' : 'Select a track · double-click opens a track')}</span>`;
 }
 function renderChips(){
   const counts = {}; let none = 0;
   for (const t of S.tracks) { const g = trackL(t.key).c; if (g) counts[g] = (counts[g]||0)+1; else none++; }
   const chips = [['all',`All ${S.tracks.length}`],['__none',`No color ${none}`]];
   for (const t of S.tags) chips.push([t.id, `<span class="dot" style="--c:${t.color}"></span>${esc(t.name)} ${counts[t.id]||0}`]);
+  $('#xFilters').innerHTML = extraCls().map(c => `<select data-xf="${c.id}" title="Filter by ${esc(c.name)}"><option value="">${esc(c.name)}: any</option><option value="__unset">${esc(c.name)}: not set</option>`
+    + (c.type === 'number' ? `<option value="__set">${esc(c.name)}: set</option>` : c.options.map(o => `<option value="${esc(o.id)}">${esc(c.name)}: ${esc(o.name)}</option>`).join('')) + '</select>').join('');
+  $('#xFilters').querySelectorAll('select').forEach(el => el.value = S.xf[el.dataset.xf] || '');
   $('#chips').innerHTML = chips.map(([id,l]) => `<button class="chip ${S.fc===id?'on':''}" data-f="${id}">${l}</button>`).join('');
 }
 function renderInfBar(){
@@ -422,7 +469,7 @@ function renderInfBar(){
   renderInfPanel();
 }
 function renderStats(){
-  const n = S.tracks.length, done = S.tracks.filter(t => { const l = trackL(t.key); return l.c || l.n; }).length;
+  const n = S.tracks.length, done = S.tracks.filter(t => { const l = trackL(t.key); return S.classes.some(c => c.enabled !== false && l[c.id] != null); }).length;
   $('#stats').textContent = S.ds ? `${done}/${n} tracks tagged · ${Object.keys(S.labels.images).length} img overrides` : '';
   $('#prog').style.width = (n ? 100*done/n : 0) + '%';
 }
@@ -444,10 +491,10 @@ function renderGallery(){
     return `<div class="card ${S.sel.has(t.key)?'sel':''}" data-k="${esc(t.key)}" style="--c:${tg?tg.color:'transparent'}">
       <div class="bar"></div>
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(mid.f)}" draggable="false">
-      <div class="nb num ${l.n?'':'empty'}" style="${l.n?'':'display:none'}">${l.n||''}</div>
+      <div class="nb num ${l.n?'':'empty'}" style="${l.n && clsOn('n')?'':'display:none'}">${l.n||''}</div>
       <div class="idx">${ti+1}/${t.images.length}</div>
-      <div class="meta"><span title="${esc(t.key)}">${esc(t.key.replace(/^.*\.mp4\./,'').replace(/^capture-/,'…'))}${n?` · <b style="color:var(--accent)">${n} ovr</b>`:''}</span>${pill(l.c)}</div>
-      ${S.tab==='inference' ? predLine(S.tp[t.key], l) : ''}</div>`;
+      <div class="meta"><span title="${esc(t.key)}">${esc(t.key.replace(/^.*\.mp4\./,'').replace(/^capture-/,'…'))}${n?` · <b style="color:var(--accent)">${n} ovr</b>`:''}</span>${clsOn('c') ? pill(l.c) : ''}</div>
+      ${xLine(id => l[id])}${S.tab==='inference' ? predLine(S.tp[t.key], l) : ''}</div>`;
   }).join('');
 }
 function renderTrack(){
@@ -462,8 +509,8 @@ function renderTrack(){
     return `<div class="card ${o?'override':''}" data-f="${esc(im.f)}" style="--c:${e?e.color:'transparent'}">
       <div class="bar"></div>
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(im.f)}" draggable="false">
-      ${en?`<div class="nb num">${en}</div>`:''}<div class="idx">#${i+1}</div>${o?'<div class="badge">image override</div>':''}
-      <div class="meta"><span>frame ${im.fr}</span>${pill(ec)}</div>${pl}</div>`;
+      ${en && clsOn('n')?`<div class="nb num">${en}</div>`:''}<div class="idx">#${i+1}</div>${o?'<div class="badge">image override</div>':''}
+      <div class="meta"><span>frame ${im.fr}</span>${clsOn('c') ? pill(ec) : ''}</div>${xLine(id => effX(id, im.f, t.key))}${pl}</div>`;
   }).join('');
 }
 
@@ -627,14 +674,15 @@ $('#content').addEventListener('dblclick', e => {
 function imageMenu(x, y, f){
   const m = showMenu(x, y, 'Tag this image only', [
     ...S.tags.map(t => ({label:t.name, color:t.color, fn:() => { applyLabels({images:{[f]:{c:t.id}}}); render(); }})), 'hr',
-    {label:'Color: use track color', fn:() => { applyLabels({images:{[f]:{c:null}}}); render(); }}]);
+    {label:'Color: use track color', fn:() => { applyLabels({images:{[f]:{c:null}}}); render(); }},
+    ...classItems((id, v) => { applyLabels({images:{[f]:{[id]:v}}}); render(); }, true)]);
   const row = document.createElement('label'); row.innerHTML = `Number <input type="number" min="1" max="${NUMMAX}" value="${S.labels.images[f]?.n ?? ''}" placeholder="1–${NUMMAX}">`;
   const inp = row.querySelector('input');
   inp.onkeydown = ev => { ev.stopPropagation(); if (ev.key === 'Enter') { const n = parseInt(inp.value); if (!(n>=1 && n<=NUMMAX)) return toast(`Number must be 1–${NUMMAX}`); closeMenu(); applyLabels({images:{[f]:{n}}}); render(); } };
   const clr = document.createElement('div'); clr.className = 'it'; clr.textContent = 'Number: use track number';
   clr.onclick = () => { closeMenu(); applyLabels({images:{[f]:{n:null}}}); render(); };
   const rst = document.createElement('div'); rst.className = 'it danger'; rst.textContent = 'Remove all overrides for this image';
-  rst.onclick = () => { closeMenu(); applyLabels({images:{[f]:{c:null,n:null}}}); render(); };
+  rst.onclick = () => { closeMenu(); applyLabels({images:{[f]:Object.fromEntries(['c','n',...extraCls().map(c => c.id)].map(id => [id, null]))}}); render(); };
   m.append(document.createElement('hr'), row, clr, rst);
 }
 $('#content').addEventListener('contextmenu', e => {
@@ -645,11 +693,15 @@ $('#content').addEventListener('contextmenu', e => {
   showMenu(e.clientX, e.clientY, `Tag ${S.sel.size} track${S.sel.size>1?'s':''}`, [
     ...S.tags.map(t => ({label:t.name, color:t.color, fn:() => setColor(t.id)})), 'hr',
     {label:'Clear color', fn:() => setColor(null)}, {label:'Clear number', fn:() => setNumber(null)},
+    ...classItems((id, v) => setField(id, v)),
     {label:'Accept model prediction', fn:() => acceptKeys([...S.sel]), skip:S.tab !== 'inference'},
     {label:'Open track', fn:() => openTrack(k)}]);
 });
 $('#palette').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.hasAttribute('data-classes')) return openClassesModal();
+  if (b.dataset.x) return setField(b.dataset.x, b.dataset.o || null);
+  if (b.dataset.xgo) return setXNumber(b.dataset.xgo, $(`#palette [data-xin="${b.dataset.xgo}"]`).value);
   if (b.hasAttribute('data-add')) return addTag();
   if (b.dataset.clear === 'c') return setColor(null);
   if (b.dataset.clear === 'n') return setNumber(null);
@@ -657,11 +709,16 @@ $('#palette').addEventListener('click', e => {
   if (b.hasAttribute('data-numgrid')) return numGrid(b);
   if (b.dataset.id) setColor(b.dataset.id);
 });
-$('#palette').addEventListener('keydown', e => { if (e.target.id === 'numin' && e.key === 'Enter') { setNumber(e.target.value); e.target.blur(); } });
+$('#palette').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'numin') { setNumber(e.target.value); e.target.blur(); }
+  else if (e.target.dataset.xin) { setXNumber(e.target.dataset.xin, e.target.value); e.target.blur(); }
+});
 $('#palette').addEventListener('contextmenu', e => {
   e.preventDefault();
   const b = e.target.closest('.tagbtn[data-id]'); if (b) editTagMenu(e.clientX, e.clientY, tagById(b.dataset.id));
 });
+$('#xFilters').addEventListener('change', e => { S.xf[e.target.dataset.xf] = e.target.value; S.sel.clear(); render(); });
 $('#chips').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { S.fc = b.dataset.f; S.sel.clear(); render(); } });
 $('#infChips').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { S.inf.filter = b.dataset.f; S.sel.clear(); render(); } });
 $('#search').addEventListener('input', e => { S.q = e.target.value; render(); });
@@ -739,6 +796,49 @@ function openExportModal(){
   browse('~');
 }
 
+/* ---------- label classes ---------- */
+function openClassesModal(){
+  closeModal();
+  const draft = JSON.parse(JSON.stringify(S.classes));
+  modalEl = document.createElement('div'); modalEl.className = 'modal';
+  modalEl.innerHTML = `<div><b>Label classes</b><div class="hint">Each class is tagged like color and number are, and exported to its own CSV column (plus <code>&lt;column&gt;_source</code>).</div>
+    <div id="clist" style="overflow:auto;display:flex;flex-direction:column;gap:10px;flex:1"></div>
+    <div style="display:flex;gap:8px"><button class="btn" id="cadd">+ Choice class</button><button class="btn" id="caddn">+ Number class</button><div class="spacer"></div>
+    <button class="btn primary" id="csave">Save</button><button class="btn" id="cclose">Cancel</button></div></div>`;
+  document.body.appendChild(modalEl);
+  modalEl.onmousedown = e => { if (e.target === modalEl) closeModal(); };
+  $('#cclose').onclick = closeModal;
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const draw = () => $('#clist').innerHTML = draft.map((c, i) => `<div class="cls" data-i="${i}">
+    <div class="r"><label class="r"><input type="checkbox" data-f="enabled" ${c.enabled !== false ? 'checked' : ''}> use</label>
+      <input type="text" data-f="name" value="${esc(c.name)}" placeholder="Name" title="Label shown in the palette">
+      <input type="text" data-f="column" value="${esc(c.column)}" placeholder="Output column" title="CSV column this class is exported to">
+      <span class="dim">${c.type}</span>${c.builtin ? '' : '<button class="btn sm ghost" data-del title="Remove this class (saved labels stay in the labels file)">✕</button>'}</div>
+    ${c.type === 'number' ? `<div class="r dim">min <input type="number" data-f="min" value="${c.min}"> max <input type="number" data-f="max" value="${c.max}"></div>`
+      : c.id === 'c' ? '<div class="hint">Options are the color tags in the palette (right-click a tag to edit, “+ tag” to add).</div>'
+      : `${c.options.map((o, j) => `<div class="r" data-j="${j}"><input type="color" data-of="color" value="${o.color}"><input type="text" data-of="name" value="${esc(o.name)}" placeholder="Option"><button class="btn sm ghost" data-delopt>✕</button></div>`).join('')}
+         <div class="r"><button class="btn sm" data-addopt>+ option</button></div>`}</div>`).join('');
+  draw();
+  const add = type => { const k = draft.filter(c => !c.builtin).length + 1;
+    draft.push(type === 'number' ? {id:'x'+uid(), name:'Count '+k, column:'count_'+k, type, enabled:true, min:0, max:100}
+      : {id:'x'+uid(), name:'Class '+k, column:'class_'+k, type, enabled:true, options:[{id:'yes', name:'Yes', color:'#30a46c'}, {id:'no', name:'No', color:'#e5484d'}]}); draw(); };
+  $('#cadd').onclick = () => add('choice'); $('#caddn').onclick = () => add('number');
+  const cur = e => { const b = e.target.closest('.cls'); return b ? draft[+b.dataset.i] : null; };
+  $('#clist').oninput = e => { const c = cur(e); if (!c) return; const f = e.target.dataset.f, of = e.target.dataset.of;
+    if (of) c.options[+e.target.closest('[data-j]').dataset.j][of] = e.target.value;
+    else if (f === 'enabled') c.enabled = e.target.checked;
+    else if (f === 'min' || f === 'max') c[f] = parseFloat(e.target.value);
+    else if (f) c[f] = e.target.value; };
+  $('#clist').onclick = e => { const c = cur(e); if (!c) return;
+    if (e.target.hasAttribute('data-del')) { draft.splice(draft.indexOf(c), 1); draw(); }
+    else if (e.target.hasAttribute('data-addopt')) { c.options.push({id:'o'+uid(), name:'Option '+(c.options.length+1), color:'#8b8d98'}); draw(); }
+    else if (e.target.hasAttribute('data-delopt')) { c.options.splice(+e.target.closest('[data-j]').dataset.j, 1); draw(); } };
+  $('#csave').onclick = async () => {
+    try { S.classes = await api('/api/classes', {classes: draft}); closeModal(); render(); toast('Classes saved'); }
+    catch(e){ toast(e.message); }
+  };
+}
+
 // keyboard entry: color letter (Q W E R T Y U I O P) and/or digits build a pending tag; nothing applies until Enter
 let pend = {c:null, n:''};
 function pendShow(){
@@ -759,14 +859,14 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); return undo(); }
   if (S.tab === 'rot') return rotKey(e);
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  const hk = !e.shiftKey && e.key.length === 1 ? S.tags.find(t => tagKeys()[t.id] === e.key.toLowerCase()) : null;
+  const hk = clsOn('c') && !e.shiftKey && e.key.length === 1 ? S.tags.find(t => tagKeys()[t.id] === e.key.toLowerCase()) : null;
   if (hk) { e.preventDefault(); pend.c = hk.id; return pendShow(); }
-  if (/^[0-9]$/.test(e.key)) { e.preventDefault(); if (pend.n.length < 3) pend.n += e.key; return pendShow(); }
+  if (clsOn('n') && /^[0-9]$/.test(e.key)) { e.preventDefault(); if (pend.n.length < 3) pend.n += e.key; return pendShow(); }
   if (e.key === 'Enter' && (pend.c || pend.n)) { e.preventDefault(); return pendCommit(); }
   if (e.key === 'Backspace' && (pend.c || pend.n)) { e.preventDefault(); if (pend.n) pend.n = pend.n.slice(0,-1); else pend.c = null; return pendShow(); }
   if (e.key === 'Escape') { if (pend.c || pend.n) return pendClear(); if (document.querySelector('.menu')) return closeMenu(); if (modalEl) return closeModal(); if (S.view==='track') back(); else { S.sel.clear(); render(); } return; }
   if (e.key === 'Backspace' && S.view === 'track') return back();
-  if (e.key === 'Delete') return setColor(null);
+  if (e.key === 'Delete' && clsOn('c')) return setColor(null);
   if (S.view === 'gallery') {
     if (e.key.toLowerCase() === 'a' && S.tab === 'inference') return acceptKeys([...S.sel]);
     const cols = Math.max(1, getComputedStyle($('#content')).gridTemplateColumns.split(' ').length);
@@ -784,7 +884,7 @@ function renderMerge(){
     M.built = true;
     el.innerHTML = `<div class="panel"><h3>Merge labels from another CSV into <b id="mTarget" style="color:var(--text)"></b></h3>
       <p class="hint" style="margin-top:0">Rows are matched by <code>crop_filepath</code>. Colors, numbers and rotations are copied into this program's own labels (exported as
-      <code>tag_color</code>, <code>tag_number</code>, <code>tag_rotation</code>), whatever the source columns are called.</p>
+      <code>${esc(cls('c')?.column || 'tag_color')}</code>, <code>${esc(cls('n')?.column || 'tag_number')}</code>, <code>tag_rotation</code>), whatever the source columns are called.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="mSrc" style="flex:1;min-width:260px" placeholder="/path/to/other.csv">
         <button class="btn" id="mBrowse">Browse…</button><button class="btn primary" id="mScan">Scan</button></div>
       <div id="mInfo" class="hint" style="margin-top:8px"></div>
