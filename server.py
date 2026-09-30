@@ -73,6 +73,25 @@ def get_datasets(): return read_json(DS_FILE, {})
 def get_classes(): return read_json(CLASSES_FILE, None) or DEFAULT_CLASSES
 
 
+def check_columns(classes, tags):
+    """Every output column (class, per-option, per-color-tag) must be unique and not reserved."""
+    seen = set()
+    for col in [c["column"] for c in classes] + [o["column"] for c in classes for o in c.get("options", []) if o.get("column")] \
+            + [t["column"] for t in tags if t.get("column")]:
+        if col in RESERVED_COLS or col.endswith("_source") or col in seen:
+            raise ValueError(f"output column '{col}' is reserved or used twice")
+        seen.add(col)
+
+
+def clean_tags(lst, classes):
+    out = [{**t, "column": str(t.get("column") or "").strip()} for t in lst]
+    for t in out:
+        if not t["column"]:
+            del t["column"]
+    check_columns(classes, out)
+    return out
+
+
 def clean_classes(lst):
     """Validate the class list sent by the UI; built-in classes are always kept."""
     out, ids, cols = [], set(), set()
@@ -94,9 +113,11 @@ def clean_classes(lst):
             except (TypeError, ValueError): raise ValueError("min and max must be numbers")
             e["min"], e["max"] = int(lo) if lo == int(lo) else lo, int(hi) if hi == int(hi) else hi
         elif cid != "c":
-            e["options"] = [{"id": str(o["id"]), "name": str(o.get("name") or o["id"]), "color": o.get("color") or "#8b8d98"}
-                            for o in c.get("options", [])]
+            e["options"] = [{"id": str(o["id"]), "name": str(o.get("name") or o["id"]), "color": o.get("color") or "#8b8d98",
+                             "column": str(o.get("column") or "").strip()} for o in c.get("options", [])]
+            e["multi"] = bool(c.get("multi"))
         out.append(e)
+    check_columns(out, get_tags())
     if not {"c", "n"} <= ids:
         raise ValueError("the built-in Color and Number classes cannot be removed")
     return out
@@ -228,7 +249,10 @@ def write_tagged_csv(name, oh):
     classes = [c for c in get_classes() if c.get("enabled", True)]
     opts = {c["id"]: {o["id"]: o["name"] for o in c.get("options", [])} for c in classes}
     opts["c"] = tags
-    new = ["track_key_sam"] + [x for c in classes for x in (c["column"], c["column"] + "_source")] + \
+    tag_list = get_tags()
+    def opt_list(c): return tag_list if c["id"] == "c" else c.get("options", [])
+    def optcols(c): return [o["column"] for o in opt_list(c) if o.get("column")] if c["type"] == "choice" else []
+    new = ["track_key_sam"] + [x for c in classes for x in (c["column"], c["column"] + "_source", *optcols(c))] + \
           ["tag_rotation", "pred_color", "pred_color_conf", "pred_number", "pred_number_conf"]
     cols = []
     for r, _ in iter_rows(name, ds["csv"]):        # header union (base columns first)
@@ -251,7 +275,15 @@ def write_tagged_csv(name, oh):
                     v, src = tl[field], "track"
                 else:
                     v, src = "", ""
-                r[c["column"]] = opts[field].get(v, v) if c["type"] == "choice" else v
+                have = v if isinstance(v, list) else ([v] if v != "" else [])
+                if c.get("multi"):
+                    r[c["column"]] = ";".join(o["name"] for o in c["options"] if o["id"] in have)
+                else:
+                    r[c["column"]] = opts[field].get(v, v) if c["type"] == "choice" else v
+                if c["type"] == "choice":
+                    for o in opt_list(c):
+                        if o.get("column"):
+                            r[o["column"]] = ("1" if o["id"] in have else "0") if have or src else ""
                 r[c["column"] + "_source"] = src
             r["tag_rotation"] = il.get("r", "")
             p = preds.get(fn)
@@ -259,6 +291,98 @@ def write_tagged_csv(name, oh):
                 r["pred_color"] = tags.get(p[0], p[0] or "")
                 r["pred_color_conf"], r["pred_number"], r["pred_number_conf"] = p[1], p[2] if p[2] is not None else "", p[3]
         w.writerow(r)
+
+
+# ---------- import existing tags on open ----------
+def import_labels(name, csv_path):
+    """Seed labels from the CSV's own tag columns (tag_color, tag_number, tag_rotation, other classes).
+    <column>_source ("image"/"track") decides where a value lives; without it a value shared by
+    every image of a track becomes a track label, otherwise an image label."""
+    ds = get_dataset(name)
+    tags = get_tags(); classes = [c for c in get_classes() if c.get("enabled", True)]
+    tmap = {}
+    for t in tags:
+        tmap[t["id"].lower()] = t["id"]; tmap[t["name"].lower()] = t["id"]
+    cmap = {c["id"]: {**{str(o["id"]).lower(): o["id"] for o in c.get("options", [])},
+                      **{str(o["name"]).lower(): o["id"] for o in c.get("options", [])}}
+            for c in classes if c["type"] == "choice" and c["id"] != "c"}
+    def conv(c, v):
+        v = (v or "").strip()
+        if not v or v.lower() in ("nan", "null"):
+            return None
+        if c["type"] == "number":
+            try: x = float(v)
+            except ValueError: return None
+            return int(x) if x == int(x) else x
+        if c["id"] == "c":
+            if v.lower() not in tmap:
+                base = slug(v); i, nid = 2, base
+                while nid in {t["id"] for t in tags}:
+                    nid = f"{base}_{i}"; i += 1
+                tags.append({"id": nid, "name": v, "color": hsl_hex(sum(map(ord, v)) * 47 % 360)})
+                tmap[v.lower()] = nid
+            return tmap[v.lower()]
+        if c.get("multi"):
+            ids = [cmap[c["id"]].get(p.strip().lower()) for p in re.split(r"[;|,]", v)]
+            return tuple(i for i in ids if i)
+        return cmap[c["id"]].get(v.lower())
+    truthy = ("1", "1.0", "true", "yes", "y", "x")
+    vals, rot = {}, {}
+    n_tags = len(tags)
+    colmap = None       # class id / "r" -> (value column, source column) as spelled in this CSV
+    for r, use_tid in iter_rows(name, csv_path):
+        if colmap is None:
+            low = {k.lower(): k for k in r}
+            colmap = {}
+            for c in classes:
+                names = [c["column"]] + (GUESS.get(c["id"], []) if c.get("builtin") else [])
+                col = next((low[x.lower()] for x in names if x.lower() in low), None)
+                ocols = [(o["id"], low[o["column"].lower()]) for o in (tags if c["id"] == "c" else c.get("options", []))
+                         if c["type"] == "choice" and o.get("column") and o["column"].lower() in low]
+                if col or ocols:
+                    colmap[c["id"]] = (col, low.get((col or "").lower() + "_source"), ocols)
+            col = next((low[x] for x in GUESS["r"] if x in low), None)
+            if col:
+                colmap["r"] = (col, None, [])
+        f = row_fields(r, use_tid)
+        if not f:
+            continue
+        fn, _, key, _ = f
+        for c in classes:
+            if c["id"] in colmap:
+                col, scol, ocols = colmap[c["id"]]
+                v = conv(c, r.get(col)) if col else None
+                if ocols:
+                    on = tuple(oid for oid, oc in ocols if (r.get(oc) or "").strip().lower() in truthy)
+                    if c.get("multi"):
+                        v = tuple(dict.fromkeys((v or ()) + on))
+                    elif v is None and on:
+                        v = on[0]
+                if v is not None and v != ():
+                    vals[(c["id"], key, fn)] = (v, (r.get(scol) or "").strip().lower() if scol else "")
+        if "r" in colmap:
+            try: rot[fn] = float(r[colmap["r"][0]]) if (r.get(colmap["r"][0]) or "").strip() else None
+            except ValueError: pass
+    lab = {"tracks": {}, "images": {}}
+    per_track = {}
+    for (cid, key, fn), (v, src) in vals.items():
+        per_track.setdefault((cid, key), []).append((fn, v, src))
+    for (cid, key), items in per_track.items():
+        vs = {v for _, v, _ in items}
+        n_img = len(ds["tracks"][key]["images"]) if key in ds["tracks"] else len(items)
+        srcs = {s for _, _, s in items}
+        if len(vs) == 1 and (srcs == {"track"} or (srcs == {""} and len(items) == n_img)):
+            lab["tracks"].setdefault(key, {})[cid] = list(items[0][1]) if isinstance(items[0][1], tuple) else items[0][1]
+        else:
+            for fn, v, s in items:
+                lab["images"].setdefault(fn, {})[cid] = list(v) if isinstance(v, tuple) else v
+    for fn, a in rot.items():
+        if a is not None:
+            lab["images"].setdefault(fn, {})["r"] = int(a) if a == int(a) else a
+    if len(tags) != n_tags:
+        write_json(TAGS_FILE, tags)
+    if lab["tracks"] or lab["images"]:
+        write_json(label_path(name), lab)
 
 
 # ---------- merge ----------
@@ -648,14 +772,18 @@ class H(BaseHTTPRequestHandler):
                         name = f"{base}_{i}"; i += 1
                     dsets[name] = path
                     write_json(DS_FILE, dsets)
+                    if not os.path.exists(label_path(name)):
+                        import_labels(name, path)
                 get_dataset(name)
                 return self.send(200, {"name": name})
             if p == "/api/forget":
                 d = get_datasets(); d.pop(b["name"], None); write_json(DS_FILE, d)
                 return self.send(200, {"ok": True})
             if p == "/api/tags":
-                write_json(TAGS_FILE, b["tags"])
-                return self.send(200, {"ok": True})
+                try: tg = clean_tags(b["tags"], get_classes())
+                except ValueError as e: return self.send(400, {"error": str(e)})
+                write_json(TAGS_FILE, tg)
+                return self.send(200, tg)
             if p == "/api/classes":
                 try: cl = clean_classes(b["classes"])
                 except ValueError as e: return self.send(400, {"error": str(e)})

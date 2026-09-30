@@ -64,9 +64,9 @@ Requirements for the CSV:
 
 If the images don't show up, the app tells you *"Couldn't find images at the CSV's crop_filepath…"*. See [Troubleshooting](#troubleshooting).
 
-> **Known issue in this version:** once a dataset is already open, the **Open CSV…** button in the top bar may do nothing when you press **Select** (the browser console shows `onPick is not a function`). Workaround: open the browser's developer console (F12 → *Console*), type `openModal()` and press Enter. The same dialog appears and works normally. (The welcome-screen button is not affected.) Remove this note once the bug is fixed.
+**Existing tags are imported.** The first time a CSV is opened, its tag columns are read and shown right away: color (`tag_color`, `Tag_color`, `color`…), number (`tag_number`, `ground_truth_numbers`, `number`…), rotation (`tag_rotation`, `rotation`, `tag_angle`), plus the columns of your own classes and per-tag columns (see [Export](#9-export-your-results)). Column names are matched ignoring upper/lower case. A `<column>_source` column (`track`/`image`) decides whether a value applies to the whole track or one image; without it, a value shared by every image of a track becomes a track tag and anything else is per image. Unknown color names become new color buttons. This only happens the first time: a dataset that already has saved labels is never overwritten (to re-import, use **✕** to remove it from the list, delete `labels/<dataset>.json`, and open the CSV again).
 
-You can open several CSVs. Switch between them with the **dataset dropdown** at the top. The small **✕** next to *Open CSV…* only removes the dataset from the dropdown; your CSV and your labels are kept on disk.
+You can open several CSVs at any time, also while one is already open. Switch between them with the **dataset dropdown** at the top. The small **✕** next to *Open CSV…* only removes the dataset from the dropdown; your CSV and your labels are kept on disk.
 
 ### 2. A tour of the screen
 
@@ -176,6 +176,7 @@ Tagging with the keyboard + Enter always moves on to the next track. Nothing mov
 - **Color:** choose a different display color.
 - **Hotkey:** click the box, then press the key you want (a letter or symbol; digits are reserved for numbers). **Backspace/Delete** removes the shortcut. If another color already used that key, it loses it.
 - **Move left / Move right:** reorder the buttons. This also changes the default shortcuts, which follow the order.
+- **CSV column:** optional. Also export this tag to its own column (`1` if tagged, `0` if not), e.g. `is_red`. Leave empty to only use the shared column. Names must be unique and not reserved.
 - **Delete tag…:** removes the button. You are asked to confirm, and every label using that color is cleared (numbers are kept).
 
 **+ tag** creates a new color button (you type its name and a color is picked for you; change it afterwards with a right-click). The palette is **shared by all datasets**.
@@ -318,7 +319,9 @@ It contains all the columns of your original CSV plus:
 | `track_key_sam` | The track this row belongs to. |
 | `tag_color`, `tag_number` | The final color name and number for the image. |
 | `tag_color_source`, `tag_number_source` | `track` (inherited from the whole track) or `image` (this image's own override). Empty = not tagged. |
-| *your own classes* | Click **⚙ Classes** in the palette to rename the color/number output columns, hide them, or add any number of extra *choice* classes (e.g. `has_pollen`: Yes/No) and *number* classes (e.g. `pollen_count`). Each is tagged from the palette (and the right-click menus) and exported as `<column>` plus `<column>_source`. |
+| *your own classes* | Each class shows its output column in the palette (e.g. `Color → tag_color`); click it to rename the class or change the column. **⚙ Classes** adds or hides classes: extra *choice* classes (e.g. `pollen`: Yes/No) and *number* classes (e.g. `pollen_count`). Each is tagged from the palette (and the right-click menus) and exported as `<column>` plus `<column>_source`. Right-click an option to change its name/color or delete it; **+ option** adds one. |
+| *multi-select classes* | Tick **multi-select** for a choice class in **⚙ Classes**: several options can be on at once (click toggles; highlighted = on). The class column holds the names joined with `;` (e.g. `Corbicula;Load`). |
+| *per-tag / per-option columns* | Give any color tag (right-click → **CSV column**) or class option (right-click, or **⚙ Classes**) its own column: `1` if tagged, `0` if the row is tagged in that class otherwise, blank if untouched. These columns are read back when a CSV is opened. |
 | `tag_rotation` | Degrees clockwise from the Rotation tab (empty if not set). |
 | `pred_color`, `pred_color_conf`, `pred_number`, `pred_number_conf` | The model's prediction and confidence, if you ran inference. |
 
@@ -329,7 +332,8 @@ You can export as often as you like; the file is overwritten with the latest sta
 | File | Contents |
 |---|---|
 | `<dataset>.json` | Your labels (autosaved on every change). |
-| `_tags.json` | The color buttons. |
+| `_tags.json` | The color buttons (including their optional CSV columns). |
+| `_classes.json` | The label classes (names, columns, options, multi-select). |
 | `_datasets.json` | The list of opened CSVs. |
 | `<dataset>.pred.json` | Model predictions. |
 | `<dataset>.extra.csv` | Rows added by Merge. |
@@ -367,7 +371,6 @@ Back up the `labels/` folder to keep your work safe.
 | *"Number must be 1–100"* | Numbers 0, above 100, or empty are not valid. |
 | Keyboard shortcuts do nothing | A text box probably has focus: click an empty part of the page. Also make sure you are not on the Distribution or Merge tab, where tagging shortcuts are off. |
 | *"Select a track first"* | Click a track before pressing a color or number. |
-| Open CSV… button does nothing | See the [known issue](#1-start-the-app-and-open-your-data) above. |
 | Inference says *"a job is already running"* | Wait for it to finish or press **Stop**. |
 | Inference shows a ⚠ error message | The message comes from your model script (for example a missing library or a wrong weights path). Check the *Python executable* matches the environment where your model works. |
 | Merge says *"column … not found"* | Type the exact name of the column from the other CSV in the *source column* box. |
