@@ -7,7 +7,7 @@ Open a tracks CSV from the UI; images are loaded from its `crop_filepath` column
 (falling back to <csv dir>/crops/<crop_filename>). Source CSVs are never modified;
 labels autosave to labels/<dataset>.json.
 """
-import argparse, csv, json, mimetypes, os, re, shutil, subprocess, sys, threading, time
+import argparse, csv, io, json, mimetypes, os, re, shutil, subprocess, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -17,6 +17,7 @@ LABELS = os.environ.get("BEETAGGER_LABELS") or os.path.join(HERE, "labels")
 TAGS_FILE = os.path.join(LABELS, "_tags.json")
 DS_FILE = os.path.join(LABELS, "_datasets.json")
 INFER_FILE = os.path.join(LABELS, "_infer.json")
+CLASSES_FILE = os.path.join(LABELS, "_classes.json")
 IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
 DEFAULT_TAGS = [
     {"id": "red", "name": "Red", "color": "#e5484d"},
@@ -29,6 +30,15 @@ DEFAULT_TAGS = [
     {"id": "white", "name": "White", "color": "#f0f0f0"},
     {"id": "none", "name": "No tag", "color": "#8b8d98"},
 ]
+# Label classes: what can be tagged, and the CSV column each one is exported to.
+# "c" (choice, options = the tag palette above) and "n" (number) are built in; extra classes are
+# {"id", "name", "column", "type": "choice"|"number", "options": [{id,name,color}] | "min"/"max"}.
+DEFAULT_CLASSES = [
+    {"id": "c", "name": "Color", "column": "tag_color", "type": "choice", "builtin": True, "enabled": True},
+    {"id": "n", "name": "Number", "column": "tag_number", "type": "number", "builtin": True, "enabled": True, "min": 1, "max": 100},
+]
+RESERVED_COLS = {"track_key_sam", "tag_rotation", "pred_color", "pred_color_conf", "pred_number", "pred_number_conf",
+                 "crop_filepath", "crop_filename"}
 csv.field_size_limit(sys.maxsize)
 lock = threading.Lock()
 cache = {}          # name -> loaded dataset
@@ -60,6 +70,36 @@ def label_path(name): return os.path.join(LABELS, safe(name) + ".json")
 def pred_path(name): return os.path.join(LABELS, safe(name) + ".pred.json")
 def get_tags(): return read_json(TAGS_FILE, DEFAULT_TAGS)
 def get_datasets(): return read_json(DS_FILE, {})
+def get_classes(): return read_json(CLASSES_FILE, None) or DEFAULT_CLASSES
+
+
+def clean_classes(lst):
+    """Validate the class list sent by the UI; built-in classes are always kept."""
+    out, ids, cols = [], set(), set()
+    for c in lst:
+        cid, col = str(c.get("id") or "").strip(), str(c.get("column") or "").strip()
+        if not cid or cid in ids:
+            raise ValueError("bad or duplicate class id")
+        if not col:
+            raise ValueError("every class needs an output column name")
+        if col in RESERVED_COLS or col.endswith("_source") or col in cols:
+            raise ValueError(f"output column '{col}' is reserved or used twice")
+        ids.add(cid); cols.add(col)
+        e = {"id": cid, "name": str(c.get("name") or col).strip(), "column": col,
+             "type": "number" if c.get("type") == "number" else "choice", "enabled": c.get("enabled") is not False}
+        if cid in ("c", "n"):
+            e["builtin"] = True
+        if e["type"] == "number":
+            try: lo, hi = float(c.get("min", 0)), float(c.get("max", 100))
+            except (TypeError, ValueError): raise ValueError("min and max must be numbers")
+            e["min"], e["max"] = int(lo) if lo == int(lo) else lo, int(hi) if hi == int(hi) else hi
+        elif cid != "c":
+            e["options"] = [{"id": str(o["id"]), "name": str(o.get("name") or o["id"]), "color": o.get("color") or "#8b8d98"}
+                            for o in c.get("options", [])]
+        out.append(e)
+    if not {"c", "n"} <= ids:
+        raise ValueError("the built-in Color and Number classes cannot be removed")
+    return out
 
 
 def row_fields(r, use_tid=False):
@@ -167,44 +207,58 @@ def resolve_path(ds, f):
     return None
 
 
-def export_csv(name):
+def export_csv(name, out_dir=None):
+    """Write the tagged CSV on this machine (default: labels/); returns its path."""
+    out_dir = os.path.abspath(os.path.expanduser(out_dir)) if out_dir else LABELS
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, tagged_name(name))
+    with open(out, "w", newline="", encoding="utf-8") as oh:
+        write_tagged_csv(name, oh)
+    return out
+
+
+def tagged_name(name): return safe(name) + ".tagged.csv"
+
+
+def write_tagged_csv(name, oh):
     ds = get_dataset(name)
     lab = load_labels(name)
     tags = {t["id"]: t["name"] for t in get_tags()}
     preds = read_json(pred_path(name), {})
-    out = os.path.join(LABELS, safe(name) + ".tagged.csv")
-    new = ["track_key_sam", "tag_color", "tag_color_source", "tag_number", "tag_number_source", "tag_rotation",
-           "pred_color", "pred_color_conf", "pred_number", "pred_number_conf"]
+    classes = [c for c in get_classes() if c.get("enabled", True)]
+    opts = {c["id"]: {o["id"]: o["name"] for o in c.get("options", [])} for c in classes}
+    opts["c"] = tags
+    new = ["track_key_sam"] + [x for c in classes for x in (c["column"], c["column"] + "_source")] + \
+          ["tag_rotation", "pred_color", "pred_color_conf", "pred_number", "pred_number_conf"]
     cols = []
     for r, _ in iter_rows(name, ds["csv"]):        # header union (base columns first)
         for c in r:
             if c not in cols and c not in new:
                 cols.append(c)
-    with open(out, "w", newline="", encoding="utf-8") as oh:
-        w = csv.DictWriter(oh, fieldnames=cols + new, extrasaction="ignore")
-        w.writeheader()
-        for r, use_tid in iter_rows(name, ds["csv"]):
-            f = row_fields(r, use_tid)
-            if f:
-                fn, _, key, _ = f
-                io, to = lab["images"].get(fn, {}), lab["tracks"].get(key, {})
-                r["track_key_sam"] = key
-                for field, col in (("c", "color"), ("n", "number")):
-                    if field in io:
-                        v, src = io[field], "image"
-                    elif field in to:
-                        v, src = to[field], "track"
-                    else:
-                        v, src = "", ""
-                    r["tag_" + col] = tags.get(v, v) if field == "c" else v
-                    r["tag_%s_source" % col] = src
-                r["tag_rotation"] = io.get("r", "")
-                p = preds.get(fn)
-                if p:
-                    r["pred_color"] = tags.get(p[0], p[0] or "")
-                    r["pred_color_conf"], r["pred_number"], r["pred_number_conf"] = p[1], p[2] if p[2] is not None else "", p[3]
-            w.writerow(r)
-    return out
+    w = csv.DictWriter(oh, fieldnames=cols + new, extrasaction="ignore")
+    w.writeheader()
+    for r, use_tid in iter_rows(name, ds["csv"]):
+        f = row_fields(r, use_tid)
+        if f:
+            fn, _, key, _ = f
+            il, tl = lab["images"].get(fn, {}), lab["tracks"].get(key, {})
+            r["track_key_sam"] = key
+            for c in classes:
+                field = c["id"]
+                if field in il:
+                    v, src = il[field], "image"
+                elif field in tl:
+                    v, src = tl[field], "track"
+                else:
+                    v, src = "", ""
+                r[c["column"]] = opts[field].get(v, v) if c["type"] == "choice" else v
+                r[c["column"] + "_source"] = src
+            r["tag_rotation"] = il.get("r", "")
+            p = preds.get(fn)
+            if p:
+                r["pred_color"] = tags.get(p[0], p[0] or "")
+                r["pred_color_conf"], r["pred_number"], r["pred_number_conf"] = p[1], p[2] if p[2] is not None else "", p[3]
+        w.writerow(r)
 
 
 # ---------- merge ----------
@@ -536,6 +590,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, [{"name": n, "csv": c} for n, c in get_datasets().items()])
             if p == "/api/tags":
                 return self.send(200, get_tags())
+            if p == "/api/classes":
+                return self.send(200, get_classes())
             if p == "/api/browse":
                 d = os.path.abspath(os.path.expanduser(q.get("path") or "~"))
                 if not os.path.isdir(d):
@@ -600,6 +656,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/tags":
                 write_json(TAGS_FILE, b["tags"])
                 return self.send(200, {"ok": True})
+            if p == "/api/classes":
+                try: cl = clean_classes(b["classes"])
+                except ValueError as e: return self.send(400, {"error": str(e)})
+                write_json(CLASSES_FILE, cl)
+                return self.send(200, cl)
             if p == "/api/labels":
                 # patch: {name, tracks:{key:{c?:id|null, n?:int|null}}, images:{...}}
                 with lock:
@@ -627,7 +688,12 @@ class H(BaseHTTPRequestHandler):
                 try: return self.send(200, merge_undo(b["name"]))
                 except ValueError as e: return self.send(400, {"error": str(e)})
             if p == "/api/export":
-                return self.send(200, {"path": export_csv(b["name"])})
+                if b.get("mode") == "download":     # send the CSV to the browser (local machine)
+                    buf = io.StringIO(newline="")
+                    write_tagged_csv(b["name"], buf)
+                    return self.send(200, buf.getvalue().encode("utf-8"), "text/csv",
+                                     {"Content-Disposition": 'attachment; filename="%s"' % tagged_name(b["name"])})
+                return self.send(200, {"path": export_csv(b["name"], b.get("dir"))})
             if p == "/api/purge_tag":
                 n = 0
                 for name in get_datasets():
