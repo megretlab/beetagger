@@ -144,7 +144,7 @@ svg .bar{cursor:pointer}
     <span id="stats" class="dim" style="font-size:12px"></span>
     <div class="progress"><div id="prog"></div></div>
     <button class="btn" id="undoBtn" title="Ctrl+Z">Undo</button>
-    <button class="btn primary" id="exportBtn" title="Write a CSV copy with tag columns into labels/">Export CSV</button>
+    <button class="btn primary" id="exportBtn" title="Export a CSV copy with tag columns (to a server directory or your computer)">Export CSV</button>
   </div>
   <div class="row" id="palRow"><div id="palette"></div></div>
   <div class="row" id="tagFilterRow">
@@ -154,6 +154,7 @@ svg .bar{cursor:pointer}
     <div class="spacer"></div>
     <input type="search" id="search" placeholder="Search track…" style="width:160px">
     <label class="dim">after tagging <select id="adv"><option value="both">next when color+number set</option><option value="any">next after any tag</option><option value="off">stay</option></select></label>
+    <label class="dim">thumbnail <select id="thumbMode" title="Which image represents a track in the gallery (Shift+scroll over a card to flip through its images)"><option value="mid">middle image</option><option value="first">first image</option></select></label>
     <label class="dim">size <input type="range" id="size" min="100" max="380" value="170"></label>
   </div>
   <div class="row" id="infFilterRow" style="display:none">
@@ -163,6 +164,7 @@ svg .bar{cursor:pointer}
     <div class="spacer"></div>
     <button class="btn" id="acceptSel" title="A">Accept prediction for selected <span class="kbd">A</span></button>
     <button class="btn" id="acceptVis">Accept all visible…</button>
+    <label class="dim">thumbnail <select id="thumbMode2" title="Which image represents a track in the gallery (Shift+scroll over a card to flip through its images)"><option value="mid">middle image</option><option value="first">first image</option></select></label>
     <label class="dim">size <input type="range" id="size2" min="100" max="380" value="170"></label>
   </div>
 </header>
@@ -180,7 +182,8 @@ const $ = s => document.querySelector(s);
 const S = { ds:null, tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{}, tp:{}, imgTrack:{},
   tab:'tag', view:'gallery', open:null, sel:new Set(), anchor:null, fc:'all', fn:{mode:'any',val:null}, q:'',
   undo:[], visible:[], inf:{filter:'review', thr:100, sort:'conf', job:null},
-  dist:{unit:'images', colors:new Set(), nlo:null, nhi:null} };
+  dist:{unit:'images', colors:new Set(), nlo:null, nhi:null},
+  thumb:{mode:localStorage.getItem('thumbMode') || 'mid', at:{}} };   // gallery thumbnail: default image per track + per-track scrub position
 const NUMMAX = 100;
 const KEYS = ['q','w','e','r','t','y','u','i','o','p'];
 // hotkey per tag: explicit t.key ('' = none) wins; otherwise the default for its position, unless another tag took that key
@@ -220,7 +223,7 @@ async function loadDataset(name){
     S.tracks = d.tracks; S.labels = d.labels; S.undo = []; R.built = false;
     S.imgTrack = {}; for (const t of S.tracks) for (const im of t.images) S.imgTrack[im.f] = t.key;
     S.preds = await api('/api/preds?name=' + encodeURIComponent(name)); computeTP();
-    S.sel.clear(); S.view = 'gallery'; S.open = null; S.anchor = null;
+    S.sel.clear(); S.view = 'gallery'; S.open = null; S.anchor = null; S.thumb.at = {};
     if (d.probe[1] && !d.probe[0]) toast("Couldn't find images at the CSV's crop_filepath (or ./crops/) — check the paths");
   } catch(e){ S.tracks = []; toast('Load failed: ' + e.message); }
   render();
@@ -229,8 +232,8 @@ async function openCsvPath(path){
   try { const r = await api('/api/open', {path}); closeModal(); await refreshDatasets(r.name); }
   catch(e){ toast(e.message); }
 }
-let modalEl;
-function closeModal(){ modalEl?.remove(); modalEl = null; }
+let modalEl, modalLock = false;   // modalLock: keep the popup open while a job is running
+function closeModal(){ if (modalLock) return; modalEl?.remove(); modalEl = null; }
 async function openModal(onPick){
   onPick = onPick || openCsvPath;
   closeModal();
@@ -430,18 +433,19 @@ function predLine(p, l){
   const okC = !p.hasC || l.c === p.c, okN = !p.hasN || l.n === p.n, ok = okC && okN;
   return `<div class="predline ${ok?'ok':'bad'}" title="model prediction">🤖 ${p.hasC ? `${pill(p.c)} <span class="dim">${pct(p.cc)}</span>` : ''} ${p.hasN ? `<span class="num">${p.n}</span> <span class="dim">${pct(p.nc)}</span>` : ''}</div>`;
 }
+const thumbIdx = t => Math.min(S.thumb.at[t.key] ?? (S.thumb.mode === 'first' ? 0 : t.images.length >> 1), t.images.length - 1);
 function renderGallery(){
   const c = $('#content'); c.className = 'grid';
   const vis = S.visible = visibleTracks();
   if (!vis.length) { c.innerHTML = `<div class="empty">${S.tab==='inference' && !Object.keys(S.preds).length ? 'No predictions yet — run a model above.' : 'No tracks match this filter 🎉'}</div>`; return; }
   c.innerHTML = vis.map(t => {
-    const l = trackL(t.key), tg = tagById(l.c), mid = t.images[t.images.length>>1];
+    const l = trackL(t.key), tg = tagById(l.c), ti = thumbIdx(t), mid = t.images[ti];
     const n = t.images.reduce((a,im) => a + (S.labels.images[im.f] ? 1 : 0), 0);
     return `<div class="card ${S.sel.has(t.key)?'sel':''}" data-k="${esc(t.key)}" style="--c:${tg?tg.color:'transparent'}">
       <div class="bar"></div>
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(mid.f)}" draggable="false">
       <div class="nb num ${l.n?'':'empty'}" style="${l.n?'':'display:none'}">${l.n||''}</div>
-      <div class="idx">${t.images.length}</div>
+      <div class="idx">${ti+1}/${t.images.length}</div>
       <div class="meta"><span title="${esc(t.key)}">${esc(t.key.replace(/^.*\.mp4\./,'').replace(/^capture-/,'…'))}${n?` · <b style="color:var(--accent)">${n} ovr</b>`:''}</span>${pill(l.c)}</div>
       ${S.tab==='inference' ? predLine(S.tp[t.key], l) : ''}</div>`;
   }).join('');
@@ -668,12 +672,72 @@ $('#thr').addEventListener('input', e => { S.inf.thr = +e.target.value; $('#thrV
 $('#infSort').addEventListener('change', e => { S.inf.sort = e.target.value; render(); });
 $('#acceptSel').addEventListener('click', () => acceptKeys([...S.sel]));
 $('#acceptVis').addEventListener('click', () => { const v = S.visible.filter(t => S.tp[t.key]); if (v.length && confirm(`Accept predictions for ${v.length} visible tracks?`)) acceptKeys(v.map(t => t.key)); });
+for (const id of ['thumbMode','thumbMode2']) { $('#'+id).value = S.thumb.mode; $('#'+id).addEventListener('change', e => {
+  S.thumb.mode = e.target.value; S.thumb.at = {}; localStorage.setItem('thumbMode', S.thumb.mode); $('#thumbMode').value = $('#thumbMode2').value = S.thumb.mode; render(); }); }
+// Shift+scroll over a track card flips through that track's images in place
+let wheelAcc = 0;
+$('#content').addEventListener('wheel', e => {
+  if (S.view !== 'gallery' || !e.shiftKey) return;
+  const c = e.target.closest('.card'); if (!c) return;
+  const t = S.tracks.find(t => t.key === c.dataset.k); if (!t) return;
+  e.preventDefault();
+  wheelAcc += e.deltaY || e.deltaX;
+  const step = Math.trunc(wheelAcc / 40); if (!step) return;
+  wheelAcc -= step * 40;
+  const i = Math.max(0, Math.min(t.images.length - 1, thumbIdx(t) + step));
+  S.thumb.at[t.key] = i;
+  c.querySelector('.im').src = imgUrl(t.images[i].f); c.querySelector('.idx').textContent = `${i+1}/${t.images.length}`;
+}, {passive:false});
 $('#dsSel').addEventListener('change', e => loadDataset(e.target.value));
 $('#openBtn').addEventListener('click', openModal);
 $('#forgetBtn').addEventListener('click', async () => { if (S.ds && confirm(`Remove "${S.ds}" from the list? (labels and CSV files are kept)`)) { await api('/api/forget', {name:S.ds}); localStorage.removeItem('ds'); refreshDatasets(); } });
 $('#backBtn').addEventListener('click', back);
 $('#undoBtn').addEventListener('click', undo);
-$('#exportBtn').addEventListener('click', async () => { if (!S.ds) return; toast('Exporting…'); try { const r = await api('/api/export', {name:S.ds}); toast('Saved ' + r.path); } catch(e){ toast(e.message); } });
+$('#exportBtn').addEventListener('click', () => { if (S.ds) openExportModal(); });
+function openExportModal(){
+  closeModal();
+  modalEl = document.createElement('div'); modalEl.className = 'modal';
+  modalEl.innerHTML = `<div><b>Export CSV</b>
+    <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="xmode" value="server" checked> Save on the server (remote machine)</label>
+    <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="xmode" value="download"> Download to this computer</label>
+    <div id="xdirbox" style="display:flex;flex-direction:column;gap:10px;min-height:0;flex:1">
+      <input type="text" id="xdir" placeholder="Directory on the server">
+      <div class="dim" id="xcur"></div><div class="files" id="xfiles"></div></div>
+    <div style="display:flex;gap:8px"><button class="btn primary" id="xgo" style="flex:1">Export</button><button class="btn" id="xclose">Cancel</button></div></div>`;
+  document.body.appendChild(modalEl);
+  modalEl.onmousedown = e => { if (e.target === modalEl) closeModal(); };
+  $('#xclose').onclick = closeModal;
+  const mode = () => modalEl.querySelector('input[name=xmode]:checked').value;
+  modalEl.querySelectorAll('input[name=xmode]').forEach(r => r.onchange = () => { $('#xdirbox').style.display = mode() === 'server' ? '' : 'none'; });
+  const browse = async p => {
+    try {
+      const r = await api('/api/browse?path=' + encodeURIComponent(p));
+      $('#xcur').textContent = r.path; $('#xdir').value = r.path;
+      $('#xfiles').innerHTML = [`<div data-d="${esc(r.parent)}">📁 ..</div>`, ...r.dirs.map(d => `<div data-d="${esc(r.path + '/' + d)}">📁 ${esc(d)}</div>`)].join('');
+    } catch(e){ toast(e.message); }
+  };
+  $('#xfiles').onclick = e => { const d = e.target.closest('div[data-d]'); if (d) browse(d.dataset.d); };
+  $('#xdir').onkeydown = e => { if (e.key === 'Enter') browse($('#xdir').value.trim()); };
+  $('#xgo').onclick = async () => {
+    const dir = $('#xdir').value.trim(), m = mode(); toast('Exporting…');
+    modalLock = true; modalEl.querySelectorAll('button,input').forEach(el => el.disabled = true); $('#xgo').textContent = 'Exporting…';
+    try {
+      if (m === 'server') { const r = await api('/api/export', {name:S.ds, dir}); toast('Saved ' + r.path); }
+      else {
+        const r = await fetch('/api/export', {method:'POST', body:JSON.stringify({name:S.ds, mode:'download'})});
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+        const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
+        a.download = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || S.ds + '.tagged.csv';
+        a.click(); URL.revokeObjectURL(a.href); toast('Downloaded ' + a.download);
+      }
+      modalLock = false; closeModal();
+    } catch(e){
+      toast(e.message); modalLock = false;
+      modalEl.querySelectorAll('button,input').forEach(el => el.disabled = false); $('#xgo').textContent = 'Export';
+    }
+  };
+  browse('~');
+}
 
 // keyboard entry: color letter (Q W E R T Y U I O P) and/or digits build a pending tag; nothing applies until Enter
 let pend = {c:null, n:''};

@@ -7,7 +7,7 @@ Open a tracks CSV from the UI; images are loaded from its `crop_filepath` column
 (falling back to <csv dir>/crops/<crop_filename>). Source CSVs are never modified;
 labels autosave to labels/<dataset>.json.
 """
-import argparse, csv, json, mimetypes, os, re, shutil, subprocess, sys, threading, time
+import argparse, csv, io, json, mimetypes, os, re, shutil, subprocess, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -167,12 +167,24 @@ def resolve_path(ds, f):
     return None
 
 
-def export_csv(name):
+def export_csv(name, out_dir=None):
+    """Write the tagged CSV on this machine (default: labels/); returns its path."""
+    out_dir = os.path.abspath(os.path.expanduser(out_dir)) if out_dir else LABELS
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, tagged_name(name))
+    with open(out, "w", newline="", encoding="utf-8") as oh:
+        write_tagged_csv(name, oh)
+    return out
+
+
+def tagged_name(name): return safe(name) + ".tagged.csv"
+
+
+def write_tagged_csv(name, oh):
     ds = get_dataset(name)
     lab = load_labels(name)
     tags = {t["id"]: t["name"] for t in get_tags()}
     preds = read_json(pred_path(name), {})
-    out = os.path.join(LABELS, safe(name) + ".tagged.csv")
     new = ["track_key_sam", "tag_color", "tag_color_source", "tag_number", "tag_number_source", "tag_rotation",
            "pred_color", "pred_color_conf", "pred_number", "pred_number_conf"]
     cols = []
@@ -180,31 +192,29 @@ def export_csv(name):
         for c in r:
             if c not in cols and c not in new:
                 cols.append(c)
-    with open(out, "w", newline="", encoding="utf-8") as oh:
-        w = csv.DictWriter(oh, fieldnames=cols + new, extrasaction="ignore")
-        w.writeheader()
-        for r, use_tid in iter_rows(name, ds["csv"]):
-            f = row_fields(r, use_tid)
-            if f:
-                fn, _, key, _ = f
-                io, to = lab["images"].get(fn, {}), lab["tracks"].get(key, {})
-                r["track_key_sam"] = key
-                for field, col in (("c", "color"), ("n", "number")):
-                    if field in io:
-                        v, src = io[field], "image"
-                    elif field in to:
-                        v, src = to[field], "track"
-                    else:
-                        v, src = "", ""
-                    r["tag_" + col] = tags.get(v, v) if field == "c" else v
-                    r["tag_%s_source" % col] = src
-                r["tag_rotation"] = io.get("r", "")
-                p = preds.get(fn)
-                if p:
-                    r["pred_color"] = tags.get(p[0], p[0] or "")
-                    r["pred_color_conf"], r["pred_number"], r["pred_number_conf"] = p[1], p[2] if p[2] is not None else "", p[3]
-            w.writerow(r)
-    return out
+    w = csv.DictWriter(oh, fieldnames=cols + new, extrasaction="ignore")
+    w.writeheader()
+    for r, use_tid in iter_rows(name, ds["csv"]):
+        f = row_fields(r, use_tid)
+        if f:
+            fn, _, key, _ = f
+            io, to = lab["images"].get(fn, {}), lab["tracks"].get(key, {})
+            r["track_key_sam"] = key
+            for field, col in (("c", "color"), ("n", "number")):
+                if field in io:
+                    v, src = io[field], "image"
+                elif field in to:
+                    v, src = to[field], "track"
+                else:
+                    v, src = "", ""
+                r["tag_" + col] = tags.get(v, v) if field == "c" else v
+                r["tag_%s_source" % col] = src
+            r["tag_rotation"] = io.get("r", "")
+            p = preds.get(fn)
+            if p:
+                r["pred_color"] = tags.get(p[0], p[0] or "")
+                r["pred_color_conf"], r["pred_number"], r["pred_number_conf"] = p[1], p[2] if p[2] is not None else "", p[3]
+        w.writerow(r)
 
 
 # ---------- merge ----------
@@ -627,7 +637,12 @@ class H(BaseHTTPRequestHandler):
                 try: return self.send(200, merge_undo(b["name"]))
                 except ValueError as e: return self.send(400, {"error": str(e)})
             if p == "/api/export":
-                return self.send(200, {"path": export_csv(b["name"])})
+                if b.get("mode") == "download":     # send the CSV to the browser (local machine)
+                    buf = io.StringIO(newline="")
+                    write_tagged_csv(b["name"], buf)
+                    return self.send(200, buf.getvalue().encode("utf-8"), "text/csv",
+                                     {"Content-Disposition": 'attachment; filename="%s"' % tagged_name(b["name"])})
+                return self.send(200, {"path": export_csv(b["name"], b.get("dir"))})
             if p == "/api/purge_tag":
                 n = 0
                 for name in get_datasets():
