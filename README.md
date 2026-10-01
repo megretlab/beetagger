@@ -21,9 +21,9 @@ Labels autosave to `labels/<dataset>.json`; **Export CSV** writes `labels/<datas
   (source column names are auto-detected, e.g. `Tag_color`, `ground_truth_numbers`, `tag_rotation`; type the name if not
   found). Optionally add rows not in the current CSV (their `track_id`s are renumbered to be unique per video; they are stored
   in `labels/<dataset>.extra.csv`, the source CSV is untouched). "Undo last merge" restores the pre-merge state.
-- **Rotation** – every image that has a color + number, one at a time. `A`/`S` rotate left/right by the step (default 15°),
-  `Z`/`X` or Ctrl+A / Ctrl+S / Ctrl+click = 1°, Enter saves and goes to the next. Saved as `tag_rotation` (degrees clockwise)
-  in the export.
+- **Rotation** – a grid of every image that has a color + number, grouped by track. Drag a crop to free-rotate it,
+  Shift+drag to move it (not saved), click = +90°, right-click for more / delete. Also has a one-image phone view with
+  touch gestures. Saved as `tag_rotation` (degrees clockwise, 2 decimals) in the export.
 - **Distribution** – tagged totals, color bars, number histogram stacked by color; click bars / set a number
   range to cross-filter; toggle Images vs Tracks.
 
@@ -279,32 +279,41 @@ Color names in the other file that don't exist in your palette are created autom
 
 ### 8. Rotation tab: record which way is up
 
-Some tags are photographed rotated or upside down. This tab lets you record, for each image, how many degrees it must be turned **clockwise** so that the number reads upright. It is saved as **`tag_rotation`** in the export.
+Some tags are photographed rotated or upside down. This tab lets you record, for each image, how many degrees it must be turned **clockwise** so that the number reads upright. It is saved as **`tag_rotation`** in the export (rounded to 2 decimals).
 
-![Rotation tab](docs/img/rotation.png)
+The tab shows a **grid** of every image that already has **both a color and a number** (tag some in the Tag tab first), one section per track with its progress (*12/30*). Every crop is drawn rotated by its saved angle about its own centre, so an image that was already rotated looks exactly the same as one you rotate by hand from 0°. Changes **save immediately**; a dashed border means "not annotated yet", a badge shows the angle.
 
-The tab shows, **one at a time**, every image that already has **both a color and a number** (tag some in the Tag tab first). The picture is shown large, with a thin **crosshair** to help you judge what is straight. The big number is the current angle.
+| Action | How |
+|---|---|
+| **Free-rotate** a crop | **Drag** with the left mouse button (pivots on the image centre) |
+| **Move** the image inside its cell, to centre it before rotating | **Shift + drag**. View-only: moving is never saved, only the angle is |
+| Rotate **+90°** | **Click** the crop |
+| Rotate ±5° / ±1° | Hover a crop, **← / →** / **Shift + ← / →** |
+| Reset the angle to 0° | Hover, **0** |
+| Remove the saved rotation | Hover, **Delete** |
+| Rotate a whole track | **+90° all** / **rotate all by…** in the section header |
+| More options | **Right-click** a crop: ±90°, mark upright, re-center image, remove saved rotation, **Delete image from dataset…** |
 
-**Workflow:** turn the image until the number looks upright, then press **Enter**. The angle is saved and the next image appears.
+Top bar: **▦ Grid** toggles a grid over all crops, the **🔍 slider** zooms the grid (bigger crops, fewer per row), **Re-center all** resets moved images, **only not annotated** hides finished images, **Jump to first unfinished** scrolls to the next one, **📱 Phone view** switches to the touch view below. Grid and zoom settings are remembered by the browser.
 
-| Action | Keyboard | Mouse |
-|---|---|---|
-| Rotate **left** (counter-clockwise) by the *step* (default 15°) | **A** | **⟲ Left** |
-| Rotate **right** (clockwise) by the *step* | **S** | **Right ⟳** |
-| Rotate left / right by exactly **1°** | **Z** / **X** | **⟲ 1°** / **1° ⟳** |
-| Rotate by 1° using the big buttons | **Ctrl + A** / **Ctrl + S** | **Ctrl + click** the Left / Right button |
-| Reset the angle to 0° | **0** | **Reset to 0°** |
-| **Save and go to the next** image | **Enter** | **Save & next** |
-| Go to the previous / next image **without saving** | **←** / **→** | **◀ Prev** / **Skip ▶** |
-| Delete the saved rotation of this image | **Delete** | **Remove saved rotation** |
-| Undo the last save | **Ctrl + Z** | **Undo** (top bar) |
+#### Deleting an image
 
-Other controls on the right:
-- **Step:** change the size of the big rotation step (default 15°).
-- **Angle:** type an exact value (half degrees are allowed).
-- **Only images not annotated yet:** hides the images that already have a rotation, so you only see what's left.
-- **Jump to first not annotated:** goes straight to the first unfinished image.
-- The caption under the picture shows your position (*1 / 58*), how many are done, the track, frame, color and number, and *saved 165°* if a rotation already exists.
+Right-click an image (in the Rotation grid, the phone view's **🗑 Delete image** button, or inside an opened track) and choose **Delete image from dataset…**. It disappears from the app and from exports. Your CSV and image files are never touched: deleted names are kept in `labels/<dataset>.deleted.json` (remove a name from that file to bring the image back).
+
+#### Phone view (touch)
+
+On touch screens or narrow windows the Rotation tab shows **one image at a time** (switch with **📱 Phone view** / **🖥**):
+
+- **One finger:** rotate around the image centre (saved when you lift the finger).
+- **Two fingers:** drag the image and pinch to zoom (view-only, not saved).
+- Buttons: ⟲90 / ⟲1° / 1°⟳ / 90⟳, Upright 0°, Reset view, ▦ Grid, **Prev / Next**, **🗑 Delete image**, Remove rotation.
+- **Fix this image's color** (tag buttons) and **number** (input + Set #); "track color / track #" go back to the track's value.
+
+To use it from a phone on the **same Wi-Fi**, start the server so it listens on the network and open `http://<computer-ip>:8002` on the phone:
+
+    python3 server.py --port 8002 --host 0.0.0.0
+
+There is **no login**, so anyone on that network can open the app: stop the server when you are done. From another network or mobile data you would need something like Tailscale or a tunnel (not set up here; a tunnel needs a password added first).
 
 ### 9. Export your results
 
@@ -337,6 +346,7 @@ You can export as often as you like; the file is overwritten with the latest sta
 | `_datasets.json` | The list of opened CSVs. |
 | `<dataset>.pred.json` | Model predictions. |
 | `<dataset>.extra.csv` | Rows added by Merge. |
+| `<dataset>.deleted.json` | Images deleted in the app (hidden from the app and exports). |
 | `<dataset>.tagged.csv` | The last export. |
 | `backups/` | Copy of your labels taken before each merge (used by *Undo last merge*). |
 

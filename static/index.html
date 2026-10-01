@@ -132,6 +132,23 @@ svg text{fill:var(--dim);font-size:10px}
 .rc .rn{position:absolute;left:0;bottom:0;background:#000c;padding:1px 5px;font-size:12px}
 .rc b{position:absolute;right:0;top:0;background:var(--accent);color:#000;font:10px monospace;padding:1px 4px}
 .rc:not(.rot) b{display:none}
+body.rphone .title,body.rphone #openBtn,body.rphone #forgetBtn,body.rphone #stats,body.rphone .progress,body.rphone #undoBtn,body.rphone #exportBtn,body.rphone #crumb{display:none}
+body.rphone main{padding:8px}
+.ph{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+.phtop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.phstage{position:relative;width:100%;height:min(calc(100vw - 16px),56vh);background:#07080a;border:1px solid var(--line);border-radius:12px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.phstage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
+.phstage .gh,.phstage .gv{position:absolute;background:rgba(108,140,255,.45);pointer-events:none}
+.phstage .gh{left:0;right:0;top:50%;height:1px}.phstage .gv{top:0;bottom:0;left:50%;width:1px}
+.phstage.gridon::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(rgba(255,255,255,.28) 1px,transparent 1px) 0 0/100% 12.5%,linear-gradient(90deg,rgba(255,255,255,.28) 1px,transparent 1px) 0 0/12.5% 100%}
+.phang{text-align:center;font-size:26px;font-weight:800}
+.phrow{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:8px}
+.phrow .btn{padding:14px 6px;font-size:16px;text-align:center}
+.btn.danger{color:#ff7b80;border-color:#5a2a2e}
+.phfix{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.phfix .h{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
+.phtags{display:flex;flex-wrap:wrap;gap:8px}.phtags .tagbtn{padding:12px 14px;font-size:15px}
+.phnum{display:flex;gap:8px}.phnum input{flex:1;min-width:0;font-size:20px;padding:10px}.phnum .btn{padding:10px 14px}
 .rotwrap{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
 .stage{position:relative;width:min(74vh,720px,92vw);aspect-ratio:1;background:#07080a;border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:transform .08s}
@@ -450,6 +467,7 @@ function render(){
   $('#dist').style.display = tab === 'dist' ? '' : 'none';
   $('#merge').style.display = tab === 'merge' ? '' : 'none';
   $('#rot').style.display = tab === 'rot' ? '' : 'none';
+  document.body.classList.toggle('rphone', tab === 'rot' && R.phone);
   $('#content').style.display = special ? 'none' : '';
   $('#backBtn').style.display = track ? '' : 'none';
   for (const id of ['dsSel','openBtn','forgetBtn']) $('#'+id).style.display = track ? 'none' : '';
@@ -683,7 +701,7 @@ function moveSel(d){
   S.sel = new Set([vis[i].key]); S.anchor = vis[i].key; render();
   requestAnimationFrame(() => document.querySelector('.card.sel')?.scrollIntoView({block:'nearest'}));
 }
-function setTab(t){ pendClear(); if (t === 'rot') R.built = false; S.tab = t; S.view = 'gallery'; S.open = null; S.sel.clear(); render(); window.scrollTo(0,0); if (t === 'inference') renderInfPanel(); }
+function setTab(t){ pendClear(); if (t === 'rot') { R.built = false; R.pl = null; } S.tab = t; S.view = 'gallery'; S.open = null; S.sel.clear(); render(); window.scrollTo(0,0); if (t === 'inference') renderInfPanel(); }
 
 /* ---------- events ---------- */
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) setTab(b.dataset.t); });
@@ -993,6 +1011,7 @@ function renderMergeRes(){
 // Drag = free-rotate around the cell centre, click = +90°, hover + ←/→ = ±5° (Shift ±1°), 0 = reset.
 const R = {todo:false, hov:null, drag:null, pan:{}, grid:localStorage.getItem('rgrid') === '1'};   // pan = view-only offsets per image, never saved as annotation
 R.size = +localStorage.getItem('rsize') || 140;
+R.phone = (() => { try { const v = localStorage.getItem('rphone'); if (v !== null) return v === '1'; } catch(_){} return matchMedia('(pointer:coarse)').matches || innerWidth < 700; })();
 const panOf = f => R.pan[f] || [0,0];
 const rotTf = (f, deg) => { const [x,y] = panOf(f); return `translate(${x}px,${y}px) rotate(${deg}deg)`; };
 const normA = a => ((Math.round(a*100)/100) % 360 + 360) % 360;
@@ -1012,13 +1031,14 @@ function rotCell(im, t){
     <div class="gh"></div><div class="gv"></div><span class="rn num">${num}</span><b>${r === undefined ? '' : r + '°'}</b></div>`;
 }
 function renderRot(){
+  if (R.phone) return phRender();
   const el = $('#rot'), secs = rotSections();
   const all = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key)).length, 0);
   const done = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key) && rotOf(im.f) !== undefined).length, 0);
   el.innerHTML = `<div class="rbar"><span class="hint"><b>drag</b> free-rotate · <b>Shift+drag</b> move image (not saved) · <b>click</b> +90° · hover + <b>←/→</b> ±5° (<b>Shift</b> ±1°) · <b>0</b> reset · <b>right-click</b> more / delete image</span>
     <span class="rprog">${done} / ${all} annotated</span>
     <label class="dim"><input type="checkbox" id="rTodo" ${R.todo ? 'checked' : ''}> only not annotated</label>
-    <button class="btn sm ${R.grid ? 'primary' : ''}" id="rGrid" title="Toggle a grid over every image">▦ Grid</button><button class="btn sm" id="rCenter" title="Put every image back in the middle">Re-center all</button><label class="dim" title="Zoom: bigger images, fewer per row">🔍 <input type="range" id="rSize" min="80" max="480" step="10" value="${R.size}" style="vertical-align:middle;width:130px"></label><button class="btn sm" id="rFirst">Jump to first unfinished</button><span id="rHud" class="hint"></span></div>` +
+    <button class="btn sm" id="rPhone" title="One-image touch view for phones">📱 Phone view</button><button class="btn sm ${R.grid ? 'primary' : ''}" id="rGrid" title="Toggle a grid over every image">▦ Grid</button><button class="btn sm" id="rCenter" title="Put every image back in the middle">Re-center all</button><label class="dim" title="Zoom: bigger images, fewer per row">🔍 <input type="range" id="rSize" min="80" max="480" step="10" value="${R.size}" style="vertical-align:middle;width:130px"></label><button class="btn sm" id="rFirst">Jump to first unfinished</button><span id="rHud" class="hint"></span></div>` +
     (secs.length ? secs.map(({t, ims}) => {
       const n = ims.filter(im => rotOf(im.f) !== undefined).length, tg = tagById(effC(ims[0].f, t.key));
       return `<section class="rsec ${n === ims.length ? 'done' : ''}" data-k="${esc(t.key)}"><h3>${esc(t.key.replace(/^.*\.mp4\./,''))} ${pill(effC(ims[0].f, t.key))} ${numBadge(effN(ims[0].f, t.key))}
@@ -1033,6 +1053,7 @@ function renderRot(){
     el.querySelectorAll('.rc').forEach(c => c.querySelector('img').style.transform = rotTf(c.dataset.f, curA(c)));
     try { localStorage.setItem('rsize', n); } catch(_){}
   };
+  $('#rPhone').onclick = () => setPhone(true);
   $('#rGrid').onclick = e => { R.grid = !R.grid; try { localStorage.setItem('rgrid', R.grid ? '1' : '0'); } catch(_){} el.classList.toggle('gridon', R.grid); e.target.classList.toggle('primary', R.grid); };
   $('#rCenter').onclick = () => { R.pan = {}; el.querySelectorAll('.rc').forEach(c => c.querySelector('img').style.transform = rotTf(c.dataset.f, curA(c))); };
   $('#rTodo')?.addEventListener('change', e => { R.todo = e.target.checked; renderRot(); });
@@ -1117,12 +1138,120 @@ function rotKey(e){
   else if (e.key === 'Delete') { applyLabels({images:{[c.dataset.f]:{r:null}}}); renderStats(); renderRot(); }
 }
 
+/* ---------- phone rotation view ---------- */
+// One image at a time. 1 finger = rotate about the image centre, 2 fingers = drag + pinch-zoom (view only, never saved),
+// buttons for prev/next/delete and for correcting this image's color / number. Rotation autosaves when the finger lifts.
+const PH = {i:0, f:null, x:0, y:0, z:1, a:0, only:false};
+function setPhone(on){ R.phone = on; try { localStorage.setItem('rphone', on ? '1' : '0'); } catch(_){} R.pl = null; render(); }
+function phList(){
+  if (R.pl) return R.pl;
+  R.pl = [];
+  for (const t of S.tracks) for (const im of t.images)
+    if (effC(im.f, t.key) && effN(im.f, t.key) && (!PH.only || rotOf(im.f) === undefined)) R.pl.push({f:im.f, k:t.key, fr:im.fr});
+  const j = PH.f ? R.pl.findIndex(x => x.f === PH.f) : -1;
+  if (j >= 0) PH.i = j;
+  return R.pl;
+}
+const phTf = () => `translate(${PH.x}px,${PH.y}px) scale(${PH.z}) rotate(${PH.a}deg)`;
+function phPaint(){
+  const im = $('#phImg'); if (im) im.style.transform = phTf();
+  const a = $('#phAng'); if (a) a.textContent = `${PH.a}°  ×${PH.z.toFixed(1)}`;
+}
+function phGo(d){
+  const L = phList(), j = PH.i + d;
+  if (j < 0 || j >= L.length) return toast(j < 0 ? 'First image' : 'Last image');
+  PH.i = j; phRender();
+}
+function phRender(){
+  const el = $('#rot'), L = phList();
+  PH.i = Math.max(0, Math.min(PH.i, L.length - 1));
+  const it = L[PH.i];
+  if (!it) {
+    PH.f = null;
+    el.innerHTML = `<div class="empty">${PH.only ? 'Every image already has a rotation 🎉' : 'No images have both a color and a number yet.'}<br><br>${PH.only ? '<button class="btn" id="phAll">Show all again</button>' : ''}<button class="btn" id="phDesk">🖥 Grid view</button></div>`;
+    $('#phAll')?.addEventListener('click', () => { PH.only = false; R.pl = null; phRender(); });
+    $('#phDesk')?.addEventListener('click', () => setPhone(false));
+    return;
+  }
+  if (PH.f !== it.f) { PH.f = it.f; PH.x = PH.y = 0; PH.z = 1; PH.a = rotOf(it.f) ?? 0; }
+  const done = L.filter(x => rotOf(x.f) !== undefined).length, saved = rotOf(it.f);
+  const ec = effC(it.f, it.k), en = effN(it.f, it.k);
+  el.innerHTML = `<div class="ph">
+    <div class="phtop"><b>${PH.i + 1} / ${L.length}</b><span class="dim">${done} annotated${saved !== undefined ? ` · saved ${saved}°` : ''}</span>${pill(ec)} ${numBadge(en)}
+      <span class="spacer"></span><label class="dim"><input type="checkbox" id="phOnly" ${PH.only ? 'checked' : ''}> not annotated</label><button class="btn sm ghost" id="phDesk">🖥</button></div>
+    <div class="phstage ${R.grid ? 'gridon' : ''}" id="phStage"><img id="phImg" src="${imgUrl(it.f)}" draggable="false"><div class="gh"></div><div class="gv"></div></div>
+    <div class="phang"><span id="phAng"></span></div>
+    <div class="phrow"><button class="btn" data-pa="-90">⟲ 90</button><button class="btn" data-pa="-1">⟲ 1°</button><button class="btn" data-pa="1">1° ⟳</button><button class="btn" data-pa="90">90 ⟳</button></div>
+    <div class="phrow"><button class="btn" id="phView">Reset view</button><button class="btn" id="phZero">Upright 0°</button><button class="btn ${R.grid ? 'primary' : ''}" id="phGrid">▦ Grid</button></div>
+    <div class="phrow nav"><button class="btn" id="phPrev">◀ Prev</button><button class="btn primary" id="phNext">Next ▶</button></div>
+    <div class="phrow"><button class="btn danger" id="phDel">🗑 Delete image</button>${saved !== undefined ? '<button class="btn ghost" id="phClr">Remove rotation</button>' : ''}</div>
+    <div class="phfix"><div class="h">Fix this image's color</div>
+      <div class="phtags">${S.tags.map(t => `<button class="tagbtn ${t.id === ec ? 'act' : ''}" data-pc="${t.id}" style="--c:${t.color}"><span class="dot"></span>${esc(t.name)}</button>`).join('')}<button class="tagbtn clear" data-pc="">track color</button></div>
+      <div class="h">Fix number</div>
+      <div class="phnum"><input type="number" id="phNum" inputmode="numeric" min="1" max="${NUMMAX}" value="${en ?? ''}" placeholder="1–${NUMMAX}"><button class="btn" id="phSetN">Set #</button><button class="btn ghost" id="phClrN">track #</button></div></div>
+  </div>`;
+  phPaint();
+  const nx = L[PH.i + 1]; if (nx) new Image().src = imgUrl(nx.f);
+  const f = it.f;
+  el.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => phSet(PH.a + +b.dataset.pa));
+  $('#phView').onclick = () => { PH.x = PH.y = 0; PH.z = 1; phPaint(); };
+  $('#phZero').onclick = () => phSet(0);
+  $('#phGrid').onclick = e => { R.grid = !R.grid; try { localStorage.setItem('rgrid', R.grid ? '1' : '0'); } catch(_){} $('#phStage').classList.toggle('gridon', R.grid); e.target.classList.toggle('primary', R.grid); };
+  $('#phPrev').onclick = () => phGo(-1); $('#phNext').onclick = () => phGo(1);
+  $('#phDel').onclick = () => deleteImage(f);
+  $('#phClr')?.addEventListener('click', () => { applyLabels({images:{[f]:{r:null}}}); renderStats(); PH.a = 0; phRender(); });
+  $('#phDesk').onclick = () => setPhone(false);
+  $('#phOnly').onchange = e => { PH.only = e.target.checked; R.pl = null; phRender(); };
+  el.querySelectorAll('[data-pc]').forEach(b => b.onclick = () => { applyLabels({images:{[f]:{c:b.dataset.pc || null}}}); renderStats(); phRender(); });
+  const setN = () => { const n = parseInt($('#phNum').value); if (!(n >= 1 && n <= NUMMAX)) return toast(`Number must be 1–${NUMMAX}`); applyLabels({images:{[f]:{n}}}); renderStats(); phRender(); toast('Number set'); };
+  $('#phSetN').onclick = setN; $('#phNum').onkeydown = e => { if (e.key === 'Enter') setN(); };
+  $('#phClrN').onclick = () => { applyLabels({images:{[f]:{n:null}}}); renderStats(); phRender(); };
+  phGestures($('#phStage'));
+}
+function phSet(deg){ PH.a = normA(deg); phPaint(); if (!PH.f) return; applyLabels({images:{[PH.f]:{r:PH.a}}}); renderStats(); const p = $('#rot .phtop .dim'); if (p) p.textContent = `${R.pl.filter(x => rotOf(x.f) !== undefined).length} annotated · saved ${PH.a}°`; }
+function phGestures(st){
+  const pts = new Map(); let g = null, rotated = false;
+  const rect = () => st.getBoundingClientRect();
+  const cen = () => { const r = rect(); return [r.left + r.width/2, r.top + r.height/2]; };
+  const baseline = () => {
+    const [cx, cy] = cen(), P = [...pts.values()];
+    if (P.length === 1) g = {m:1, ang0:Math.atan2(P[0].y - (cy + PH.y), P[0].x - (cx + PH.x)) * 180/Math.PI, a0:PH.a, moved:false};
+    else if (P.length >= 2) {
+      const [p, q] = P, mx = (p.x + q.x)/2, my = (p.y + q.y)/2;
+      g = {m:2, d0:Math.hypot(p.x - q.x, p.y - q.y) || 1, z0:PH.z, vx:mx - cx - PH.x, vy:my - cy - PH.y};
+    } else g = null;
+  };
+  st.addEventListener('pointerdown', e => { e.preventDefault(); st.setPointerCapture(e.pointerId); pts.set(e.pointerId, {x:e.clientX, y:e.clientY}); baseline(); });
+  st.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId) || !g) return;
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    const [cx, cy] = cen(), P = [...pts.values()];
+    if (g.m === 1 && P.length === 1) {
+      const ang = Math.atan2(P[0].y - (cy + PH.y), P[0].x - (cx + PH.x)) * 180/Math.PI;
+      let d = ang - g.ang0; d = ((d + 540) % 360) - 180;
+      if (Math.abs(d) > 2) g.moved = true;
+      if (g.moved) { PH.a = normA(g.a0 + d); rotated = true; phPaint(); }
+    } else if (g.m === 2 && P.length >= 2) {
+      const [p, q] = P, mx = (p.x + q.x)/2, my = (p.y + q.y)/2, k = Math.max(.3, Math.min(10, g.z0 * (Math.hypot(p.x - q.x, p.y - q.y) || 1) / g.d0)) / g.z0;
+      PH.z = g.z0 * k; PH.x = mx - cx - g.vx * k; PH.y = my - cy - g.vy * k; phPaint();   // the point between the fingers stays under them
+    }
+  });
+  const up = e => {
+    if (!pts.delete(e.pointerId)) return;
+    if (pts.size) { baseline(); return; }
+    g = null;
+    if (rotated) { rotated = false; phSet(PH.a); }   // pan/zoom are not annotations — only the angle is saved
+  };
+  st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up);
+}
+
 /* ---------- delete image ---------- */
 async function deleteImage(f){
   if (!confirm(`Delete "${f}" from this dataset?\n\nIt disappears from the app and from exports. The CSV and the image file are not touched (list kept in labels/${S.ds}.deleted.json).`)) return;
   try { await api('/api/delete_image', {name:S.ds, f}); } catch(e){ return toast('Delete failed: ' + e.message); }
   const k = S.imgTrack[f], t = S.tracks.find(x => x.key === k);
   if (t) { t.images = t.images.filter(im => im.f !== f); if (!t.images.length) { S.tracks = S.tracks.filter(x => x !== t); S.sel.delete(k); if (S.open === t) { S.open = null; S.view = 'gallery'; } } }
+  if (R.pl) R.pl = R.pl.filter(x => x.f !== f);
   delete S.imgTrack[f]; delete S.labels.images[f]; delete S.preds[f]; S.undo = [];
   render(); toast('Image deleted');
 }
