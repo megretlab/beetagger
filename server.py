@@ -165,15 +165,26 @@ def load_labels(name):
 def extra_path(name): return os.path.join(LABELS, safe(name) + ".extra.csv")
 
 
+def deleted_path(name): return os.path.join(LABELS, safe(name) + ".deleted.json")
+
+
+def get_deleted(name): return set(read_json(deleted_path(name), []))
+
+
 def iter_rows(name, csv_path):
-    """Yield (row, use_tid) for the base CSV, then for rows appended by Merge."""
-    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
-        for r in csv.DictReader(fh):
-            yield r, False
-    if os.path.exists(extra_path(name)):
-        with open(extra_path(name), newline="", encoding="utf-8-sig") as fh:
+    """Yield (row, use_tid) for the base CSV, then for rows appended by Merge.
+    Images the user deleted in the app (labels/<name>.deleted.json) are skipped; the CSV itself is never edited."""
+    gone = get_deleted(name)
+    for path, use_tid in ((csv_path, False), (extra_path(name), True)):
+        if use_tid and not os.path.exists(path):
+            continue
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
-                yield r, True
+                if gone:
+                    f = row_fields(r, use_tid)
+                    if f and f[0] in gone:
+                        continue
+                yield r, use_tid
 
 
 def stamp(name, csv_path):
@@ -805,6 +816,15 @@ class H(BaseHTTPRequestHandler):
                             if not e:
                                 del lab[kind][k]
                     write_json(lp, lab)
+                return self.send(200, {"ok": True})
+            if p == "/api/delete_image":
+                with lock:
+                    gone = get_deleted(b["name"]) | {b["f"]}
+                    write_json(deleted_path(b["name"]), sorted(gone))
+                    cache.pop(b["name"], None)
+                    lab = load_labels(b["name"])
+                    if lab["images"].pop(b["f"], None) is not None:
+                        write_json(label_path(b["name"]), lab)
                 return self.send(200, {"ok": True})
             if p == "/api/merge/scan":
                 try: return self.send(200, merge_scan(b["name"], b["path"]))

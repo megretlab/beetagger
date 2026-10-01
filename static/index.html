@@ -117,6 +117,21 @@ svg text{fill:var(--dim);font-size:10px}
 .bad{border-color:#e5484d !important}.okc{color:#30a46c}.warnc{color:#ff9b52}
 .res{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
 .res .tile b{font-size:22px}
+.rbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:6px 2px 10px;position:sticky;top:0;background:var(--bg);z-index:5}
+.rprog{font-weight:700}
+.rsec h3{display:flex;align-items:center;gap:10px;font-size:14px;margin:16px 2px 8px}
+.rsec.done h3{opacity:.45}.rsec .rp{font-style:normal;color:var(--accent);font-size:12px}
+.rgrid{display:flex;flex-wrap:wrap;gap:6px}
+.rc{cursor:crosshair;position:relative;width:var(--rs,140px);height:var(--rs,140px);border:3px solid var(--c);border-radius:6px;overflow:hidden;background:#07080a;user-select:none}
+.rc:not(.rot){border-style:dashed}.rc.hov{border-color:#fff}
+.rc img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
+.rc::after{content:'';position:absolute;inset:0;pointer-events:none;display:none;background:linear-gradient(rgba(255,255,255,.28) 1px,transparent 1px) 0 0/100% 12.5%,linear-gradient(90deg,rgba(255,255,255,.28) 1px,transparent 1px) 0 0/12.5% 100%}
+.gridon .rc::after{display:block}
+.rc .gh,.rc .gv{position:absolute;background:rgba(108,140,255,.35);pointer-events:none}
+.rc .gh{left:0;right:0;top:50%;height:1px}.rc .gv{top:0;bottom:0;left:50%;width:1px}
+.rc .rn{position:absolute;left:0;bottom:0;background:#000c;padding:1px 5px;font-size:12px}
+.rc b{position:absolute;right:0;top:0;background:var(--accent);color:#000;font:10px monospace;padding:1px 4px}
+.rc:not(.rot) b{display:none}
 .rotwrap{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
 .stage{position:relative;width:min(74vh,720px,92vw);aspect-ratio:1;background:#07080a;border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:transform .08s}
@@ -699,7 +714,9 @@ function imageMenu(x, y, f){
   clr.onclick = () => { closeMenu(); applyLabels({images:{[f]:{n:null}}}); render(); };
   const rst = document.createElement('div'); rst.className = 'it danger'; rst.textContent = 'Remove all overrides for this image';
   rst.onclick = () => { closeMenu(); applyLabels({images:{[f]:Object.fromEntries(['c','n',...extraCls().map(c => c.id)].map(id => [id, null]))}}); render(); };
-  m.append(document.createElement('hr'), row, clr, rst);
+  const del = document.createElement('div'); del.className = 'it danger'; del.textContent = 'Delete image from dataset…';
+  del.onclick = () => { closeMenu(); deleteImage(f); };
+  m.append(document.createElement('hr'), row, clr, rst, document.createElement('hr'), del);
 }
 $('#content').addEventListener('contextmenu', e => {
   e.preventDefault();
@@ -971,76 +988,143 @@ function renderMergeRes(){
 }
 
 /* ---------- rotation ---------- */
-const R = {list:[], i:0, angle:0, step:15, todo:false, built:false};
-function rotBuild(keepF){
-  const list = [];
-  for (const t of S.tracks) for (const im of t.images)
-    if (effC(im.f, t.key) && effN(im.f, t.key) && (!R.todo || S.labels.images[im.f]?.r === undefined)) list.push({f:im.f, k:t.key, fr:im.fr});
-  R.list = list;
-  const j = keepF ? list.findIndex(x => x.f === keepF) : -1;
-  R.i = j >= 0 ? j : 0; R.built = true; rotLoad();
-}
-function rotLoad(){ const it = R.list[R.i]; R.angle = it ? (S.labels.images[it.f]?.r ?? 0) : 0; }
+// Grid of crops, one section per track. Every image is drawn rotated clockwise about its own centre by its saved angle,
+// so an image that was already rotated and the same image rotated by hand from 0° end up identical.
+// Drag = free-rotate around the cell centre, click = +90°, hover + ←/→ = ±5° (Shift ±1°), 0 = reset.
+const R = {todo:false, hov:null, drag:null, pan:{}, grid:localStorage.getItem('rgrid') === '1'};   // pan = view-only offsets per image, never saved as annotation
+R.size = +localStorage.getItem('rsize') || 140;
+const panOf = f => R.pan[f] || [0,0];
+const rotTf = (f, deg) => { const [x,y] = panOf(f); return `translate(${x}px,${y}px) rotate(${deg}deg)`; };
 const normA = a => ((Math.round(a*100)/100) % 360 + 360) % 360;
-function rotBy(d){ R.angle = normA(R.angle + d); rotPaint(); }
-function rotPaint(){
-  const im = $('#rimg'); if (im) im.style.transform = `rotate(${R.angle}deg)`;
-  const a = $('#rAngle'); if (a) a.textContent = R.angle.toFixed(R.angle % 1 ? 1 : 0) + '°';
-  const inp = $('#rAngleIn'); if (inp && document.activeElement !== inp) inp.value = R.angle;
+const rotOf = f => S.labels.images[f]?.r;
+function rotSections(){
+  const out = [];
+  for (const t of S.tracks) {
+    const ims = t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key) && (!R.todo || rotOf(im.f) === undefined));
+    if (ims.length) out.push({t, ims});
+  }
+  return out;
+}
+function rotCell(im, t){
+  const r = rotOf(im.f), num = effN(im.f, t.key), c = tagById(effC(im.f, t.key));
+  return `<div class="rc ${r === undefined ? '' : 'rot'}" data-f="${esc(im.f)}" style="--c:${c ? c.color : 'transparent'}" title="${esc(im.f)}">
+    <img src="${imgUrl(im.f)}" loading="lazy" decoding="async" draggable="false" style="transform:${rotTf(im.f, r ?? 0)}">
+    <div class="gh"></div><div class="gv"></div><span class="rn num">${num}</span><b>${r === undefined ? '' : r + '°'}</b></div>`;
 }
 function renderRot(){
-  const el = $('#rot'); if (!R.built) rotBuild();
-  const it = R.list[R.i], n = R.list.length;
-  if (!it) { el.innerHTML = `<div class="empty">${R.todo ? 'Every image with a color + number already has a rotation 🎉' : 'No images have both a color and a number yet — tag some in the Tag tab first.'}<br><br>${R.todo ? '<button class="btn" id="rTodoOff">Show all again</button>' : ''}</div>`; $('#rTodoOff')?.addEventListener('click', () => { R.todo = false; rotBuild(); renderRot(); }); return; }
-  const done = R.list.filter(x => S.labels.images[x.f]?.r !== undefined).length, saved = S.labels.images[it.f]?.r;
-  const c = effC(it.f, it.k), num = effN(it.f, it.k);
-  el.innerHTML = `<div class="rotwrap">
-    <div><div class="stage" id="stage"><img id="rimg" src="${imgUrl(it.f)}" draggable="false"><div class="g gh"></div><div class="g gv"></div></div>
-      <div class="hint" style="margin-top:8px;text-align:center">${R.i+1} / ${n} · ${done} annotated · ${esc(it.k.replace(/^.*\.mp4\./,''))} · frame ${it.fr} · ${pill(c)} ${numBadge(num)} ${saved !== undefined ? `· saved <b>${saved}°</b>` : ''}</div></div>
-    <div class="side">
-      <div class="angle" id="rAngle">0°</div>
-      <div class="two"><button class="btn" data-rot="-1" title="A (Ctrl = 1°)">⟲ Left <span class="kbd">A</span></button><button class="btn" data-rot="1" title="S (Ctrl = 1°)">Right ⟳ <span class="kbd">S</span></button></div>
-      <div class="two"><button class="btn" data-fine="-1" title="Z">⟲ 1° <span class="kbd">Z</span></button><button class="btn" data-fine="1" title="X">1° ⟳ <span class="kbd">X</span></button></div>
-      <div class="hint">Hold <b>Ctrl</b> while clicking (or pressing A / S) to move just 1°</div>
-      <label class="dim">Step <input type="number" id="rStep" min="1" max="180" value="${R.step}"> °</label>
-      <label class="dim">Angle <input type="number" id="rAngleIn" step="0.5" value="${R.angle}"> °</label>
-      <button class="btn" id="rReset">Reset to 0° <span class="kbd">0</span></button>
-      <button class="btn primary" id="rSave">Save &amp; next <span class="kbd">Enter</span></button>
-      <div class="two"><button class="btn" id="rPrev">◀ Prev</button><button class="btn" id="rSkip">Skip ▶</button></div>
-      <button class="btn ghost" id="rClear" ${saved === undefined ? 'disabled' : ''}>Remove saved rotation <span class="kbd">Del</span></button>
-      <label class="dim"><input type="checkbox" id="rTodo" ${R.todo?'checked':''}> only images not annotated yet</label>
-      <button class="btn ghost" id="rFirst">Jump to first not annotated</button>
-      <div class="hint">Rotate until the number reads upright. Saved as <code>tag_rotation</code> (degrees, clockwise) on export.</div></div></div>`;
-  rotPaint();
-  el.querySelectorAll('button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));   // keep focus off buttons so Enter never double-fires
-  el.querySelectorAll('[data-rot]').forEach(b => b.onclick = e => rotBy(+b.dataset.rot * (e.ctrlKey ? 1 : R.step)));
-  el.querySelectorAll('[data-fine]').forEach(b => b.onclick = () => rotBy(+b.dataset.fine));
-  $('#rStep').oninput = e => { R.step = Math.max(1, +e.target.value || 15); };
-  $('#rAngleIn').onchange = e => { R.angle = normA(+e.target.value || 0); rotPaint(); };
-  $('#rReset').onclick = () => { R.angle = 0; rotPaint(); };
-  $('#rSave').onclick = rotSave;
-  $('#rPrev').onclick = () => rotGo(-1); $('#rSkip').onclick = () => rotGo(1);
-  $('#rClear').onclick = rotClear;
-  $('#rTodo').onchange = e => { R.todo = e.target.checked; rotBuild(it.f); renderRot(); };
-  $('#rFirst').onclick = () => { const j = R.list.findIndex(x => S.labels.images[x.f]?.r === undefined); if (j < 0) return toast('All annotated'); R.i = j; rotLoad(); renderRot(); };
-  const nx = R.list[R.i+1]; if (nx) new Image().src = imgUrl(nx.f);   // prefetch
+  const el = $('#rot'), secs = rotSections();
+  const all = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key)).length, 0);
+  const done = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key) && rotOf(im.f) !== undefined).length, 0);
+  el.innerHTML = `<div class="rbar"><span class="hint"><b>drag</b> free-rotate · <b>Shift+drag</b> move image (not saved) · <b>click</b> +90° · hover + <b>←/→</b> ±5° (<b>Shift</b> ±1°) · <b>0</b> reset · <b>right-click</b> more / delete image</span>
+    <span class="rprog">${done} / ${all} annotated</span>
+    <label class="dim"><input type="checkbox" id="rTodo" ${R.todo ? 'checked' : ''}> only not annotated</label>
+    <button class="btn sm ${R.grid ? 'primary' : ''}" id="rGrid" title="Toggle a grid over every image">▦ Grid</button><button class="btn sm" id="rCenter" title="Put every image back in the middle">Re-center all</button><label class="dim" title="Zoom: bigger images, fewer per row">🔍 <input type="range" id="rSize" min="80" max="480" step="10" value="${R.size}" style="vertical-align:middle;width:130px"></label><button class="btn sm" id="rFirst">Jump to first unfinished</button><span id="rHud" class="hint"></span></div>` +
+    (secs.length ? secs.map(({t, ims}) => {
+      const n = ims.filter(im => rotOf(im.f) !== undefined).length, tg = tagById(effC(ims[0].f, t.key));
+      return `<section class="rsec ${n === ims.length ? 'done' : ''}" data-k="${esc(t.key)}"><h3>${esc(t.key.replace(/^.*\.mp4\./,''))} ${pill(effC(ims[0].f, t.key))} ${numBadge(effN(ims[0].f, t.key))}
+        <i class="rp">${n}/${ims.length}</i><button class="btn sm" data-r90>+90° all</button><button class="btn sm" data-rany>rotate all by…</button></h3>
+        <div class="rgrid">${ims.map(im => rotCell(im, t)).join('')}</div></section>`;
+    }).join('') : `<div class="empty">${R.todo ? 'Every image with a color + number already has a rotation 🎉' : 'No images have both a color and a number yet — tag some in the Tag tab first.'}<br><br>${R.todo ? '<button class="btn" id="rTodoOff">Show all again</button>' : ''}</div>`);
+  el.classList.toggle('gridon', R.grid); el.style.setProperty('--rs', R.size + 'px');
+  $('#rSize').oninput = e => {
+    const n = +e.target.value, k = n / R.size; R.size = n;
+    for (const f in R.pan) R.pan[f] = [R.pan[f][0] * k, R.pan[f][1] * k];   // keep moved images at the same relative spot
+    el.style.setProperty('--rs', n + 'px');
+    el.querySelectorAll('.rc').forEach(c => c.querySelector('img').style.transform = rotTf(c.dataset.f, curA(c)));
+    try { localStorage.setItem('rsize', n); } catch(_){}
+  };
+  $('#rGrid').onclick = e => { R.grid = !R.grid; try { localStorage.setItem('rgrid', R.grid ? '1' : '0'); } catch(_){} el.classList.toggle('gridon', R.grid); e.target.classList.toggle('primary', R.grid); };
+  $('#rCenter').onclick = () => { R.pan = {}; el.querySelectorAll('.rc').forEach(c => c.querySelector('img').style.transform = rotTf(c.dataset.f, curA(c))); };
+  $('#rTodo')?.addEventListener('change', e => { R.todo = e.target.checked; renderRot(); });
+  $('#rTodoOff')?.addEventListener('click', () => { R.todo = false; renderRot(); });
+  $('#rFirst')?.addEventListener('click', () => { const c = $('#rot .rc:not(.rot)'); c ? c.scrollIntoView({behavior:'smooth', block:'center'}) : toast('All annotated'); });
+  R.hov = null;
 }
-function rotGo(d){ const j = R.i + d; if (j < 0 || j >= R.list.length) return toast(j < 0 ? 'First image' : 'Last image'); R.i = j; rotLoad(); renderRot(); }
-function rotSave(){ const it = R.list[R.i]; if (!it) return; applyLabels({images:{[it.f]:{r:R.angle}}}); renderStats(); if (R.i < R.list.length-1) rotGo(1); else { renderRot(); toast('Saved — that was the last image'); } }
-function rotClear(){ const it = R.list[R.i]; if (!it || S.labels.images[it.f]?.r === undefined) return; applyLabels({images:{[it.f]:{r:null}}}); R.angle = 0; renderRot(); }
+// paint one cell from an angle (no save)
+function rotPaintCell(c, deg){
+  c.dataset.a = deg; c.querySelector('img').style.transform = rotTf(c.dataset.f, deg);
+  c.classList.add('rot'); c.querySelector('b').textContent = deg + '°';
+}
+function rotProgress(){
+  document.querySelectorAll('#rot .rsec').forEach(sec => {
+    const cs = sec.querySelectorAll('.rc'), n = sec.querySelectorAll('.rc.rot').length;
+    sec.querySelector('.rp').textContent = n + '/' + cs.length; sec.classList.toggle('done', n === cs.length);
+  });
+  if (!R.todo) { const p = $('#rot .rprog'); if (p) p.textContent = (S.tracks.reduce((a, t) => a + t.images.filter(im => rotOf(im.f) !== undefined && effC(im.f, t.key) && effN(im.f, t.key)).length, 0)) + ' annotated'; }
+}
+function rotCommit(cells){
+  const ch = {images:{}};
+  for (const c of cells) ch.images[c.dataset.f] = {r:normA(+c.dataset.a)};
+  applyLabels(ch); renderStats(); rotProgress();
+}
+function rotSet(c, deg, commit=true){ deg = normA(deg); rotPaintCell(c, deg); if (commit) rotCommit([c]); }
+const curA = c => +(c.dataset.a ?? rotOf(c.dataset.f) ?? 0);
+function rotHud(c){ const h = $('#rHud'); if (h) h.textContent = c ? `${c.dataset.f}  ${curA(c)}°` : ''; }
+$('#rot').addEventListener('mouseover', e => { const c = e.target.closest('.rc'); if (c === R.hov) return; R.hov?.classList.remove('hov'); R.hov = c; c?.classList.add('hov'); rotHud(c); });
+$('#rot').addEventListener('mousedown', e => {
+  const c = e.target.closest('.rc'); if (!c || e.button !== 0) return;
+  e.preventDefault();
+  const r = c.getBoundingClientRect(), [px, py] = panOf(c.dataset.f);
+  const cx = r.left + r.width/2 + px, cy = r.top + r.height/2 + py;   // rotation pivots on the image's own centre, wherever it was dragged to
+  R.drag = {c, mode:e.shiftKey ? 'pan' : 'rot', x0:e.clientX, y0:e.clientY, p0:[px, py], cx, cy,
+            start:Math.atan2(e.clientY - cy, e.clientX - cx) * 180/Math.PI, base:curA(c), moved:false};
+});
+document.addEventListener('mousemove', e => {
+  const d = R.drag; if (!d) return;
+  if (d.mode === 'pan') {
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (Math.hypot(dx, dy) > 3) d.moved = true;
+    if (d.moved) { R.pan[d.c.dataset.f] = [d.p0[0] + dx, d.p0[1] + dy]; d.c.querySelector('img').style.transform = rotTf(d.c.dataset.f, curA(d.c)); }
+    return;
+  }
+  const a = Math.atan2(e.clientY - d.cy, e.clientX - d.cx) * 180/Math.PI;   // screen y points down, so this is clockwise = CSS rotate()
+  if (Math.abs(a - d.start) > 2) d.moved = true;
+  if (d.moved) { rotSet(d.c, d.base + (a - d.start), false); rotHud(d.c); }
+});
+document.addEventListener('mouseup', () => {
+  const d = R.drag; R.drag = null; if (!d) return;
+  if (d.mode === 'pan') { if (!d.moved) rotSet(d.c, d.base + 90); return; }   // moving the image is not an annotation
+  if (d.moved) rotCommit([d.c]); else rotSet(d.c, d.base + 90);
+});
+$('#rot').addEventListener('click', e => {
+  const sec = e.target.closest('.rsec'); if (!sec) return;
+  const cs = [...sec.querySelectorAll('.rc')];
+  if (e.target.closest('[data-r90]')) { cs.forEach(c => rotSet(c, curA(c) + 90, false)); rotCommit(cs); }
+  else if (e.target.closest('[data-rany]')) {
+    const d = parseFloat(prompt('Rotate every crop in this track by how many degrees (clockwise)?', '0'));
+    if (!isNaN(d)) { cs.forEach(c => rotSet(c, curA(c) + d, false)); rotCommit(cs); }
+  }
+});
+$('#rot').addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const c = e.target.closest('.rc'); if (!c) return;
+  const f = c.dataset.f;
+  showMenu(e.clientX, e.clientY, f, [
+    {label:'Rotate +90°', fn:() => rotSet(c, curA(c) + 90)},
+    {label:'Rotate −90°', fn:() => rotSet(c, curA(c) - 90)},
+    {label:'Re-center image', skip:!R.pan[f], fn:() => { delete R.pan[f]; c.querySelector('img').style.transform = rotTf(f, curA(c)); }},
+    {label:'Mark upright (0°)', fn:() => rotSet(c, 0)},
+    {label:'Remove saved rotation', skip:rotOf(f) === undefined, fn:() => { applyLabels({images:{[f]:{r:null}}}); renderStats(); renderRot(); }},
+    'hr', {label:'Delete image from dataset…', danger:true, fn:() => deleteImage(f)}]);
+});
 function rotKey(e){
-  if (e.metaKey || e.altKey) return;
-  const k = e.key.toLowerCase(), fine = e.ctrlKey;
-  if (k === 'a') { e.preventDefault(); rotBy(-(fine ? 1 : R.step)); }
-  else if (k === 's') { e.preventDefault(); rotBy(fine ? 1 : R.step); }
-  else if (e.ctrlKey) return;
-  else if (k === 'z') rotBy(-1);
-  else if (k === 'x') rotBy(1);
-  else if (e.key === 'Enter') { e.preventDefault(); rotSave(); }
-  else if (e.key === '0') { R.angle = 0; rotPaint(); }
-  else if (e.key === 'ArrowLeft') rotGo(-1);
-  else if (e.key === 'ArrowRight') rotGo(1);
-  else if (e.key === 'Delete') rotClear();
+  if (e.metaKey || e.altKey || e.ctrlKey) return;
+  const c = R.hov; if (!c || !c.isConnected) return;
+  const step = e.shiftKey ? 1 : 5;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); rotSet(c, curA(c) - step); rotHud(c); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); rotSet(c, curA(c) + step); rotHud(c); }
+  else if (e.key === '0') { rotSet(c, 0); rotHud(c); }
+  else if (e.key === 'Delete') { applyLabels({images:{[c.dataset.f]:{r:null}}}); renderStats(); renderRot(); }
+}
+
+/* ---------- delete image ---------- */
+async function deleteImage(f){
+  if (!confirm(`Delete "${f}" from this dataset?\n\nIt disappears from the app and from exports. The CSV and the image file are not touched (list kept in labels/${S.ds}.deleted.json).`)) return;
+  try { await api('/api/delete_image', {name:S.ds, f}); } catch(e){ return toast('Delete failed: ' + e.message); }
+  const k = S.imgTrack[f], t = S.tracks.find(x => x.key === k);
+  if (t) { t.images = t.images.filter(im => im.f !== f); if (!t.images.length) { S.tracks = S.tracks.filter(x => x !== t); S.sel.delete(k); if (S.open === t) { S.open = null; S.view = 'gallery'; } } }
+  delete S.imgTrack[f]; delete S.labels.images[f]; delete S.preds[f]; S.undo = [];
+  render(); toast('Image deleted');
 }
 
 /* ---------- menus ---------- */
