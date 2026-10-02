@@ -69,6 +69,8 @@ main{padding:16px}
 .card .idx{position:absolute;top:8px;right:6px;background:rgba(0,0,0,.6);border-radius:6px;padding:0 6px;font-size:11px}
 .card .nb{position:absolute;top:10px;left:6px;font-size:15px;padding:1px 8px}
 .card.override{border-style:dashed;border-color:var(--c)}
+.card.pdel{border-style:dashed;border-color:#e5484d}.card.pdel .im{opacity:.35;filter:grayscale(1)}
+.badge.del{background:#e5484d;color:#fff}
 .badge{position:absolute;bottom:64px;left:6px;padding:1px 7px;border-radius:999px;background:var(--accent);color:#0b0d14;font-size:11px;font-weight:700}
 .empty{padding:60px;text-align:center;color:var(--dim);grid-column:1/-1}
 .menu{position:fixed;z-index:100;min-width:210px;max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 40px rgba(0,0,0,.55)}
@@ -93,6 +95,14 @@ main{padding:16px}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
 .form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}
 .form input,.form select{width:100%;color:var(--text)}
+.help{width:min(720px,94vw)!important;overflow:auto}
+.help h4{margin:12px 0 4px;color:var(--dim);font-size:12px;letter-spacing:.5px;text-transform:uppercase}
+.help .kr{display:flex;gap:12px;align-items:baseline;padding:3px 0;font-size:13px}
+.help .kr>span:first-child{flex:0 0 210px;display:flex;gap:4px;flex-wrap:wrap}
+.help kbd{font:12px ui-monospace,monospace;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--text)}
+.card.playing{border-color:var(--accent)}
+.aprog{position:absolute;left:0;right:0;height:6px;background:rgba(0,0,0,.55);z-index:3;pointer-events:none}
+.aprog i{display:block;height:100%;width:0;background:#ff9b52}.aprog.run i{background:var(--accent)}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:150;display:flex;align-items:center;justify-content:center}
 .modal>div{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(640px,94vw);max-height:84vh;display:flex;flex-direction:column;padding:16px;gap:10px}
 .files{overflow:auto;border:1px solid var(--line);border-radius:8px;flex:1;min-height:180px}
@@ -183,6 +193,7 @@ svg .bar{cursor:pointer}
     <span id="stats" class="dim" style="font-size:12px"></span>
     <div class="progress"><div id="prog"></div></div>
     <button class="btn" id="undoBtn" title="Ctrl+Z">Undo</button>
+    <button class="btn ghost" id="helpBtn" title="Key binds (?)">?</button>
     <button class="btn primary" id="exportBtn" title="Export a CSV copy with tag columns (to a server directory or your computer)">Export CSV</button>
   </div>
   <div class="row" id="palRow"><div id="palette"></div></div>
@@ -218,7 +229,7 @@ svg .bar{cursor:pointer}
 
 <script>
 const $ = s => document.querySelector(s);
-const S = { ds:null, tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{}, tp:{}, imgTrack:{},
+const S = { ds:null, pend:new Set(), tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{}, tp:{}, imgTrack:{},
   tab:'tag', view:'gallery', open:null, sel:new Set(), anchor:null, fc:'all', fn:{mode:'any',val:null}, q:'',
   undo:[], visible:[], inf:{filter:'review', thr:100, sort:'conf', job:null},
   dist:{unit:'images', colors:new Set(), nlo:null, nhi:null},
@@ -261,7 +272,7 @@ async function loadDataset(name){
   $('#content').innerHTML = '<div class="empty">Loading…</div>';
   try {
     const d = await api('/api/dataset?name=' + encodeURIComponent(name));
-    S.tracks = d.tracks; S.labels = d.labels; S.undo = []; R.built = false;
+    S.tracks = d.tracks; S.labels = d.labels; S.pend = new Set(d.pending || []); S.undo = []; R.built = false;
     S.imgTrack = {}; for (const t of S.tracks) for (const im of t.images) S.imgTrack[im.f] = t.key;
     S.preds = await api('/api/preds?name=' + encodeURIComponent(name)); computeTP();
     S.sel.clear(); S.view = 'gallery'; S.open = null; S.anchor = null; S.thumb.at = {};
@@ -457,6 +468,7 @@ function visibleTracks(){
 
 /* ---------- rendering ---------- */
 function render(){
+  stopAnim();
   const y = window.scrollY, tab = S.tab, track = S.view === 'track';
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
   const special = tab === 'dist' || tab === 'merge' || tab === 'rot';
@@ -519,7 +531,7 @@ function renderInfBar(){
 }
 function renderStats(){
   const n = S.tracks.length, done = S.tracks.filter(t => { const l = trackL(t.key); return S.classes.some(c => c.enabled !== false && l[c.id] != null); }).length;
-  $('#stats').textContent = S.ds ? `${done}/${n} tracks tagged · ${Object.keys(S.labels.images).length} img overrides` : '';
+  $('#stats').textContent = S.ds ? `${done}/${n} tracks tagged · ${Object.keys(S.labels.images).length} img overrides${S.pend.size ? ` · 🗑 ${S.pend.size} marked` : ''}` : '';
   $('#prog').style.width = (n ? 100*done/n : 0) + '%';
 }
 const pill = id => { const t = tagById(id); return t ? `<span class="pill" style="--c:${t.color}"><i></i>${esc(t.name)}</span>` : `<span class="pill dim"><i style="background:#444"></i>—</span>`; };
@@ -537,8 +549,9 @@ function renderGallery(){
   c.innerHTML = vis.map(t => {
     const l = trackL(t.key), tg = tagById(l.c), ti = thumbIdx(t), mid = t.images[ti];
     const n = t.images.reduce((a,im) => a + (S.labels.images[im.f] ? 1 : 0), 0);
-    return `<div class="card ${S.sel.has(t.key)?'sel':''}" data-k="${esc(t.key)}" style="--c:${tg?tg.color:'transparent'}">
-      <div class="bar"></div>
+    const nd = t.images.reduce((a,im) => a + (S.pend.has(im.f) ? 1 : 0), 0);
+    return `<div class="card ${S.sel.has(t.key)?'sel':''} ${nd === t.images.length ? 'pdel' : ''}" data-k="${esc(t.key)}" style="--c:${tg?tg.color:'transparent'}">
+      <div class="bar"></div>${nd ? `<div class="badge del">🗑 ${nd === t.images.length ? 'track marked for deletion' : nd + ' image' + (nd>1?'s':'') + ' marked'}</div>` : ''}
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(mid.f)}" draggable="false">
       <div class="nb num ${l.n?'':'empty'}" style="${l.n && clsOn('n')?'':'display:none'}">${l.n||''}</div>
       <div class="idx">${ti+1}/${t.images.length}</div>
@@ -555,10 +568,11 @@ function renderTrack(){
       const ok = (!p[0] || p[0] === ec) && (p[2] == null || p[2] === en);
       pl = `<div class="predline ${ok?'ok':'bad'}">🤖 ${p[0] ? `${pill(p[0])} <span class="dim">${pct(p[1])}</span>` : ''} ${p[2]!=null ? `<span class="num">${p[2]}</span> <span class="dim">${pct(p[3])}</span>` : ''}</div>`;
     }
-    return `<div class="card ${o?'override':''}" data-f="${esc(im.f)}" style="--c:${e?e.color:'transparent'}">
+    const pd = S.pend.has(im.f);
+    return `<div class="card ${o?'override':''} ${pd?'pdel':''}" data-f="${esc(im.f)}" style="--c:${e?e.color:'transparent'}">
       <div class="bar"></div>
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(im.f)}" draggable="false">
-      ${en && clsOn('n')?`<div class="nb num">${en}</div>`:''}<div class="idx">#${i+1}</div>${o?'<div class="badge">image override</div>':''}
+      ${en && clsOn('n')?`<div class="nb num">${en}</div>`:''}<div class="idx">#${i+1}</div>${pd?'<div class="badge del">🗑 marked for deletion</div>':o?'<div class="badge">image override</div>':''}
       <div class="meta"><span>frame ${im.fr}</span>${clsOn('c') ? pill(ec) : ''}</div>${xLine(id => effX(id, im.f, t.key))}${pl}</div>`;
   }).join('');
 }
@@ -732,8 +746,8 @@ function imageMenu(x, y, f){
   clr.onclick = () => { closeMenu(); applyLabels({images:{[f]:{n:null}}}); render(); };
   const rst = document.createElement('div'); rst.className = 'it danger'; rst.textContent = 'Remove all overrides for this image';
   rst.onclick = () => { closeMenu(); applyLabels({images:{[f]:Object.fromEntries(['c','n',...extraCls().map(c => c.id)].map(id => [id, null]))}}); render(); };
-  const del = document.createElement('div'); del.className = 'it danger'; del.textContent = 'Delete image from dataset…';
-  del.onclick = () => { closeMenu(); deleteImage(f); };
+  const del = document.createElement('div'); del.className = 'it danger'; del.textContent = S.pend.has(f) ? 'Unmark deletion' : 'Mark image for deletion';
+  del.onclick = () => { closeMenu(); markDelete([f], !S.pend.has(f)); };
   m.append(document.createElement('hr'), row, clr, rst, document.createElement('hr'), del);
 }
 $('#content').addEventListener('contextmenu', e => {
@@ -746,7 +760,9 @@ $('#content').addEventListener('contextmenu', e => {
     {label:'Clear color', fn:() => setColor(null)}, {label:'Clear number', fn:() => setNumber(null)},
     ...classItems((id, v) => setField(id, v)),
     {label:'Accept model prediction', fn:() => acceptKeys([...S.sel]), skip:S.tab !== 'inference'},
-    {label:'Open track', fn:() => openTrack(k)}]);
+    {label:'Open track', fn:() => openTrack(k)}, 'hr',
+    ...(() => { const fs = [...S.sel].flatMap(k => S.tracks.find(t => t.key === k)?.images.map(im => im.f) || []), un = fs.length && fs.every(f => S.pend.has(f));
+      return [{label:un ? `Unmark ${S.sel.size} track${S.sel.size>1?'s':''} for deletion` : `Mark ${S.sel.size} track${S.sel.size>1?'s':''} for deletion`, danger:true, fn:() => markDelete(fs, !un)}]; })()]);
 });
 $('#palette').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -809,6 +825,7 @@ $('#openBtn').addEventListener('click', () => openModal());
 $('#forgetBtn').addEventListener('click', async () => { if (S.ds && confirm(`Remove "${S.ds}" from the list? (labels and CSV files are kept)`)) { await api('/api/forget', {name:S.ds}); localStorage.removeItem('ds'); refreshDatasets(); } });
 $('#backBtn').addEventListener('click', back);
 $('#undoBtn').addEventListener('click', undo);
+$('#helpBtn').addEventListener('click', () => helpEl ? closeHelp() : openHelp());
 $('#exportBtn').addEventListener('click', () => { if (S.ds) openExportModal(); });
 function openExportModal(){
   closeModal();
@@ -819,6 +836,7 @@ function openExportModal(){
     <div id="xdirbox" style="display:flex;flex-direction:column;gap:10px;min-height:0;flex:1">
       <input type="text" id="xdir" placeholder="Directory on the server">
       <div class="dim" id="xcur"></div><div class="files" id="xfiles"></div></div>
+    ${S.pend.size ? `<div class="hint" style="color:#ff9b52">🗑 ${S.pend.size} image${S.pend.size>1?'s are':' is'} marked for deletion: left out of this export and removed from the dataset once it succeeds.</div>` : ''}
     <div style="display:flex;gap:8px"><button class="btn primary" id="xgo" style="flex:1">Export</button><button class="btn" id="xclose">Cancel</button></div></div>`;
   document.body.appendChild(modalEl);
   modalEl.onmousedown = e => { if (e.target === modalEl) closeModal(); };
@@ -838,14 +856,17 @@ function openExportModal(){
     const dir = $('#xdir').value.trim(), m = mode(); toast('Exporting…');
     modalLock = true; modalEl.querySelectorAll('button,input').forEach(el => el.disabled = true); $('#xgo').textContent = 'Exporting…';
     try {
-      if (m === 'server') { const r = await api('/api/export', {name:S.ds, dir}); toast('Saved ' + r.path); }
+      let gone = [];
+      if (m === 'server') { const r = await api('/api/export', {name:S.ds, dir}); gone = r.deleted || []; toast('Saved ' + r.path + (gone.length ? ` · ${gone.length} deleted image${gone.length>1?'s':''} removed` : '')); }
       else {
         const r = await fetch('/api/export', {method:'POST', body:JSON.stringify({name:S.ds, mode:'download'})});
         if (!r.ok) throw new Error((await r.json()).error || r.status);
         const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
         a.download = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || S.ds + '.tagged.csv';
         a.click(); URL.revokeObjectURL(a.href); toast('Downloaded ' + a.download);
+        if (+r.headers.get('X-Deleted-Count')) gone = [...S.pend];
       }
+      if (gone.length) purgeLocal(gone);
       modalLock = false; closeModal();
     } catch(e){
       toast(e.message); modalLock = false;
@@ -916,16 +937,23 @@ function pendCommit(){
 }
 document.addEventListener('keydown', e => {
   if (e.target.matches('input:not([type=range]),select,textarea')) return;
+  if (helpEl) { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); closeHelp(); } return; }
+  if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); return openHelp(); }
   if (S.tab === 'dist' || S.tab === 'merge' || !S.ds) return;
   if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); return undo(); }
+  if (isMenuKey(e)) { e.preventDefault(); return keyMenu(); }
   if (S.tab === 'rot') return rotKey(e);
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ' ' || (e.key === 'P' && e.shiftKey)) {   // Space is always swallowed here so the page never scrolls; Shift+P is the alternative play key
+    e.preventDefault();
+    const c = S.view === 'gallery' && document.querySelector('#content .card:hover'); if (c) toggleAnim(c); return;
+  }
   const hk = clsOn('c') && !e.shiftKey && e.key.length === 1 ? S.tags.find(t => tagKeys()[t.id] === e.key.toLowerCase()) : null;
   if (hk) { e.preventDefault(); pend.c = hk.id; return pendShow(); }
   if (clsOn('n') && /^[0-9]$/.test(e.key)) { e.preventDefault(); if (pend.n.length < 3) pend.n += e.key; return pendShow(); }
   if (e.key === 'Enter' && (pend.c || pend.n)) { e.preventDefault(); return pendCommit(); }
   if (e.key === 'Backspace' && (pend.c || pend.n)) { e.preventDefault(); if (pend.n) pend.n = pend.n.slice(0,-1); else pend.c = null; return pendShow(); }
-  if (e.key === 'Escape') { if (pend.c || pend.n) return pendClear(); if (document.querySelector('.menu')) return closeMenu(); if (modalEl) return closeModal(); if (S.view==='track') back(); else { S.sel.clear(); render(); } return; }
+  if (e.key === 'Escape') { if (anim) return stopAnim(); if (pend.c || pend.n) return pendClear(); if (document.querySelector('.menu')) return closeMenu(); if (modalEl) return closeModal(); if (S.view==='track') back(); else { S.sel.clear(); render(); } return; }
   if (e.key === 'Backspace' && S.view === 'track') return back();
   if (e.key === 'Delete' && clsOn('c')) return setColor(null);
   if (S.view === 'gallery') {
@@ -936,6 +964,82 @@ document.addEventListener('keydown', e => {
     else if (e.key === 'Enter' && S.anchor) openTrack(S.anchor);
   }
 });
+
+/* ---------- track animation (Space or Shift+P over a card) ---------- */
+// keyup too: a focused button would otherwise be "clicked" when Space is released
+document.addEventListener('keyup', e => { if (e.key === ' ' && S.ds && (S.tab === 'tag' || S.tab === 'inference') && !e.target.matches('input:not([type=range]),select,textarea')) e.preventDefault(); });
+// Space while hovering a gallery card flips through every image of that track in quick succession.
+// Space again, Esc, or moving the mouse off the card stops it and restores the thumbnail. (Space is free: digits = numbers, letters = color tags.)
+const ANIM_MS = 90;
+let anim = null;
+function stopAnim(){
+  if (!anim) return;
+  const a = anim; anim = null; clearInterval(a.h); a.bar.remove(); a.card.removeEventListener('mouseleave', stopAnim);
+  if (!a.card.isConnected) return;
+  const ti = thumbIdx(a.t);
+  a.card.classList.remove('playing'); a.card.querySelector('.im').src = imgUrl(a.t.images[ti].f); a.card.querySelector('.idx').textContent = `${ti+1}/${a.t.images.length}`;
+}
+function toggleAnim(card){
+  if (anim) { const same = anim.card === card; stopAnim(); if (same) return; }
+  const t = S.tracks.find(t => t.key === card.dataset.k); if (!t) return;
+  const n = t.images.length; if (n < 2) return toast('This track has only one image');
+  const im = card.querySelector('.im'), idx = card.querySelector('.idx');
+  const bar = document.createElement('div'); bar.className = 'aprog'; bar.innerHTML = '<i></i>';
+  bar.style.top = (im.offsetTop + im.offsetHeight - 6) + 'px'; card.appendChild(bar);   // sits on the bottom edge of the image
+  const fill = bar.firstChild, a = anim = {card, t, i:thumbIdx(t), h:0, imgs:[], bar};
+  card.classList.add('playing'); card.addEventListener('mouseleave', stopAnim);
+  let loaded = 0;   // preload every frame first (orange bar = loading, blue = playing) so frames never stall
+  const tick = () => {
+    if (anim !== a) return;
+    idx.textContent = `⏳ ${loaded}/${n}`; fill.style.width = (100 * loaded / n) + '%';
+    if (loaded < n) return;
+    bar.classList.add('run');
+    a.h = setInterval(() => { a.i = (a.i + 1) % n; im.src = a.imgs[a.i].src; idx.textContent = `▶ ${a.i+1}/${n}`; fill.style.width = (100 * (a.i + 1) / n) + '%'; }, ANIM_MS);
+  };
+  a.imgs = t.images.map(x => { const p = new Image(); p.onload = p.onerror = () => { loaded++; tick(); }; p.src = imgUrl(x.f); return p; });
+  tick();
+}
+
+/* ---------- keyboard alternative to right-click ---------- */
+// Shift+M (or the ContextMenu key / Shift+F10) opens the right-click menu of whatever is under the mouse: track card, image, tag button, rotation crop.
+// Shift+letter is free: color-tag hotkeys only fire without Shift, and plain letters/digits are left alone.
+let mouseXY = {x:0, y:0};
+document.addEventListener('mousemove', e => { mouseXY = {x:e.clientX, y:e.clientY}; }, {passive:true});
+const isMenuKey = e => !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'ContextMenu' || (e.shiftKey && (e.key === 'M' || e.key === 'F10')));
+function keyMenu(){
+  const el = document.elementFromPoint(mouseXY.x, mouseXY.y); if (!el) return;
+  el.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:mouseXY.x, clientY:mouseXY.y}));
+  if (!document.querySelector('.menu')) toast('Hover a track, image or tag first');
+}
+
+/* ---------- key bind help (?) ---------- */
+let helpEl = null;
+function closeHelp(){ helpEl?.remove(); helpEl = null; }
+function openHelp(){
+  const K = (...k) => k.map(x => `<kbd>${x}</kbd>`).join(' ');
+  const sec = (title, rows) => `<h4>${title}</h4>` + rows.map(([k, d]) => `<div class="kr"><span>${k}</span><span>${d}</span></div>`).join('');
+  const tk = tagKeys(), tagRows = S.tags.filter(t => tk[t.id]).map(t => `<kbd>${esc(tk[t.id].toUpperCase())}</kbd> <span style="color:${t.color === '#f0f0f0' ? '#888' : t.color}">● ${esc(t.name)}</span>`).join(' &nbsp; ');
+  helpEl = document.createElement('div'); helpEl.className = 'modal';
+  helpEl.innerHTML = `<div class="help"><div style="display:flex;align-items:center"><b>Key binds</b><div class="spacer"></div><span class="dim">${K('?')} or ${K('Esc')} to close</span></div>`
+    + sec('Everywhere', [[K('?'), 'Show / hide this list'], [K('Ctrl') + '+' + K('Z'), 'Undo'],
+      [K('Shift') + '+' + K('M'), 'Open the <b>right-click menu</b> of whatever is under the mouse (track, image, tag button, rotation crop) — also the ' + K('Menu') + ' key / ' + K('Shift') + '+' + K('F10')]])
+    + sec('Tag &amp; Inference — gallery', [
+      [K('Space') + ' / ' + K('Shift') + '+' + K('P'), 'Hover a track and press to <b>play its images as an animation</b> (press again, Esc, or leave the card to stop)'],
+      [K('←') + K('→') + K('↑') + K('↓'), 'Move the selection'], [K('Enter'), 'Open the selected track (or apply a pending tag)'],
+      [K('Shift') + '+scroll', 'Flip through a track\'s images under the mouse'], [K('Shift') + '+click', 'Select a range'], [K('Ctrl') + '+click', 'Add / remove from selection'],
+      [K('A'), 'Accept the model prediction for the selection (Inference tab)'], [K('Esc'), 'Cancel pending tag / close menu / clear selection'], ['double-click', 'Open a track'], ['right-click', 'Menu for a track']])
+    + sec('Tagging', [
+      [tagRows || '<span class="dim">no tag hotkeys</span>', 'Color-tag hotkeys (change them in a tag\'s right-click menu)'],
+      [K('0') + '–' + K('9'), 'Type a number (up to 3 digits)'], [K('Enter'), 'Apply the pending color + number to the selection'],
+      [K('Backspace'), 'Erase the last pending digit / pending color'], [K('Delete'), 'Clear the color of the selection']])
+    + sec('Inside a track', [[K('Backspace') + ' / ' + K('Esc'), 'Back to the track list'], ['right-click an image', 'Tag just that image']])
+    + sec('Rotation tab (hover an image)', [[K('←') + K('→'), 'Rotate ±5°'], [K('Shift') + '+' + K('←') + K('→'), 'Rotate ±1°'], [K('0'), 'Reset to upright'], [K('Delete'), 'Remove the saved rotation'],
+      ['drag / click', 'Free-rotate / +90°'], [K('Shift') + '+drag', 'Move the image (not saved)']])
+    + `<button class="btn" id="helpClose" style="margin-top:12px">Close</button></div>`;
+  document.body.appendChild(helpEl);
+  helpEl.onmousedown = e => { if (e.target === helpEl) closeHelp(); };
+  $('#helpClose').onclick = closeHelp;
+}
 
 /* ---------- merge ---------- */
 const M = {built:false, scan:null, res:null};
@@ -1016,10 +1120,11 @@ const panOf = f => R.pan[f] || [0,0];
 const rotTf = (f, deg) => { const [x,y] = panOf(f); return `translate(${x}px,${y}px) rotate(${deg}deg)`; };
 const normA = a => ((Math.round(a*100)/100) % 360 + 360) % 360;
 const rotOf = f => S.labels.images[f]?.r;
+const rotOK = (im, t) => effC(im.f, t.key) && effN(im.f, t.key) && !S.pend.has(im.f);   // images marked for deletion are skipped here
 function rotSections(){
   const out = [];
   for (const t of S.tracks) {
-    const ims = t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key) && (!R.todo || rotOf(im.f) === undefined));
+    const ims = t.images.filter(im => rotOK(im, t) && (!R.todo || rotOf(im.f) === undefined));
     if (ims.length) out.push({t, ims});
   }
   return out;
@@ -1033,9 +1138,9 @@ function rotCell(im, t){
 function renderRot(){
   if (R.phone) return phRender();
   const el = $('#rot'), secs = rotSections();
-  const all = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key)).length, 0);
-  const done = S.tracks.reduce((a, t) => a + t.images.filter(im => effC(im.f, t.key) && effN(im.f, t.key) && rotOf(im.f) !== undefined).length, 0);
-  el.innerHTML = `<div class="rbar"><span class="hint"><b>drag</b> free-rotate · <b>Shift+drag</b> move image (not saved) · <b>click</b> +90° · hover + <b>←/→</b> ±5° (<b>Shift</b> ±1°) · <b>0</b> reset · <b>right-click</b> more / delete image</span>
+  const all = S.tracks.reduce((a, t) => a + t.images.filter(im => rotOK(im, t)).length, 0);
+  const done = S.tracks.reduce((a, t) => a + t.images.filter(im => rotOK(im, t) && rotOf(im.f) !== undefined).length, 0);
+  el.innerHTML = `<div class="rbar"><span class="hint"><b>drag</b> free-rotate · <b>Shift+drag</b> move image (not saved) · <b>click</b> +90° · hover + <b>←/→</b> ±5° (<b>Shift</b> ±1°) · <b>0</b> reset · <b>right-click</b> more / mark image for deletion</span>
     <span class="rprog">${done} / ${all} annotated</span>
     <label class="dim"><input type="checkbox" id="rTodo" ${R.todo ? 'checked' : ''}> only not annotated</label>
     <button class="btn sm" id="rPhone" title="One-image touch view for phones">📱 Phone view</button><button class="btn sm ${R.grid ? 'primary' : ''}" id="rGrid" title="Toggle a grid over every image">▦ Grid</button><button class="btn sm" id="rCenter" title="Put every image back in the middle">Re-center all</button><label class="dim" title="Zoom: bigger images, fewer per row">🔍 <input type="range" id="rSize" min="80" max="480" step="10" value="${R.size}" style="vertical-align:middle;width:130px"></label><button class="btn sm" id="rFirst">Jump to first unfinished</button><span id="rHud" class="hint"></span></div>` +
@@ -1071,7 +1176,7 @@ function rotProgress(){
     const cs = sec.querySelectorAll('.rc'), n = sec.querySelectorAll('.rc.rot').length;
     sec.querySelector('.rp').textContent = n + '/' + cs.length; sec.classList.toggle('done', n === cs.length);
   });
-  if (!R.todo) { const p = $('#rot .rprog'); if (p) p.textContent = (S.tracks.reduce((a, t) => a + t.images.filter(im => rotOf(im.f) !== undefined && effC(im.f, t.key) && effN(im.f, t.key)).length, 0)) + ' annotated'; }
+  if (!R.todo) { const p = $('#rot .rprog'); if (p) p.textContent = (S.tracks.reduce((a, t) => a + t.images.filter(im => rotOf(im.f) !== undefined && rotOK(im, t)).length, 0)) + ' annotated'; }
 }
 function rotCommit(cells){
   const ch = {images:{}};
@@ -1126,7 +1231,7 @@ $('#rot').addEventListener('contextmenu', e => {
     {label:'Re-center image', skip:!R.pan[f], fn:() => { delete R.pan[f]; c.querySelector('img').style.transform = rotTf(f, curA(c)); }},
     {label:'Mark upright (0°)', fn:() => rotSet(c, 0)},
     {label:'Remove saved rotation', skip:rotOf(f) === undefined, fn:() => { applyLabels({images:{[f]:{r:null}}}); renderStats(); renderRot(); }},
-    'hr', {label:'Delete image from dataset…', danger:true, fn:() => deleteImage(f)}]);
+    'hr', {label:'Mark image for deletion', danger:true, fn:() => markDelete([f], true)}]);
 });
 function rotKey(e){
   if (e.metaKey || e.altKey || e.ctrlKey) return;
@@ -1147,7 +1252,7 @@ function phList(){
   if (R.pl) return R.pl;
   R.pl = [];
   for (const t of S.tracks) for (const im of t.images)
-    if (effC(im.f, t.key) && effN(im.f, t.key) && (!PH.only || rotOf(im.f) === undefined)) R.pl.push({f:im.f, k:t.key, fr:im.fr});
+    if (rotOK(im, t) && (!PH.only || rotOf(im.f) === undefined)) R.pl.push({f:im.f, k:t.key, fr:im.fr});
   const j = PH.f ? R.pl.findIndex(x => x.f === PH.f) : -1;
   if (j >= 0) PH.i = j;
   return R.pl;
@@ -1184,7 +1289,7 @@ function phRender(){
     <div class="phrow"><button class="btn" data-pa="-90">⟲ 90</button><button class="btn" data-pa="-1">⟲ 1°</button><button class="btn" data-pa="1">1° ⟳</button><button class="btn" data-pa="90">90 ⟳</button></div>
     <div class="phrow"><button class="btn" id="phView">Reset view</button><button class="btn" id="phZero">Upright 0°</button><button class="btn ${R.grid ? 'primary' : ''}" id="phGrid">▦ Grid</button></div>
     <div class="phrow nav"><button class="btn" id="phPrev">◀ Prev</button><button class="btn primary" id="phNext">Next ▶</button></div>
-    <div class="phrow"><button class="btn danger" id="phDel">🗑 Delete image</button>${saved !== undefined ? '<button class="btn ghost" id="phClr">Remove rotation</button>' : ''}</div>
+    <div class="phrow"><button class="btn danger" id="phDel">🗑 Mark for deletion</button>${saved !== undefined ? '<button class="btn ghost" id="phClr">Remove rotation</button>' : ''}</div>
     <div class="phfix"><div class="h">Fix this image's color</div>
       <div class="phtags">${S.tags.map(t => `<button class="tagbtn ${t.id === ec ? 'act' : ''}" data-pc="${t.id}" style="--c:${t.color}"><span class="dot"></span>${esc(t.name)}</button>`).join('')}<button class="tagbtn clear" data-pc="">track color</button></div>
       <div class="h">Fix number</div>
@@ -1198,7 +1303,7 @@ function phRender(){
   $('#phZero').onclick = () => phSet(0);
   $('#phGrid').onclick = e => { R.grid = !R.grid; try { localStorage.setItem('rgrid', R.grid ? '1' : '0'); } catch(_){} $('#phStage').classList.toggle('gridon', R.grid); e.target.classList.toggle('primary', R.grid); };
   $('#phPrev').onclick = () => phGo(-1); $('#phNext').onclick = () => phGo(1);
-  $('#phDel').onclick = () => deleteImage(f);
+  $('#phDel').onclick = () => markDelete([f], true);
   $('#phClr')?.addEventListener('click', () => { applyLabels({images:{[f]:{r:null}}}); renderStats(); PH.a = 0; phRender(); });
   $('#phDesk').onclick = () => setPhone(false);
   $('#phOnly').onchange = e => { PH.only = e.target.checked; R.pl = null; phRender(); };
@@ -1245,15 +1350,26 @@ function phGestures(st){
   st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up);
 }
 
-/* ---------- delete image ---------- */
-async function deleteImage(f){
-  if (!confirm(`Delete "${f}" from this dataset?\n\nIt disappears from the app and from exports. The CSV and the image file are not touched (list kept in labels/${S.ds}.deleted.json).`)) return;
-  try { await api('/api/delete_image', {name:S.ds, f}); } catch(e){ return toast('Delete failed: ' + e.message); }
-  const k = S.imgTrack[f], t = S.tracks.find(x => x.key === k);
-  if (t) { t.images = t.images.filter(im => im.f !== f); if (!t.images.length) { S.tracks = S.tracks.filter(x => x !== t); S.sel.delete(k); if (S.open === t) { S.open = null; S.view = 'gallery'; } } }
-  if (R.pl) R.pl = R.pl.filter(x => x.f !== f);
-  delete S.imgTrack[f]; delete S.labels.images[f]; delete S.preds[f]; S.undo = [];
-  render(); toast('Image deleted');
+/* ---------- delete image / track (marked now, applied after the next export) ---------- */
+// Marking is reversible and changes nothing on disk except labels/<name>.pending_delete.json. The next successful export leaves
+// marked images out of the CSV and then the server moves them into labels/<name>.deleted.json (the permanent list).
+async function markDelete(fs, mark){
+  fs = fs.filter(f => S.pend.has(f) !== mark); if (!fs.length) return;
+  try { const r = await api('/api/mark_delete', {name:S.ds, fs, mark}); S.pend = new Set(r.pending); } catch(e){ return toast('Failed: ' + e.message); }
+  if (R.pl) R.pl = R.pl.filter(x => !S.pend.has(x.f));
+  render(); toast(mark ? `Marked ${fs.length} image${fs.length>1?'s':''} for deletion — removed after you export (undo: right-click → Unmark)` : `Unmarked ${fs.length} image${fs.length>1?'s':''}`);
+}
+// after an export the server has permanently removed the marked images: drop them from the loaded dataset too
+function purgeLocal(fs){
+  const gone = new Set(fs);
+  for (const t of S.tracks) t.images = t.images.filter(im => !gone.has(im.f));
+  const emptied = new Set(S.tracks.filter(t => !t.images.length).map(t => t.key));
+  S.tracks = S.tracks.filter(t => t.images.length);
+  for (const k of emptied) S.sel.delete(k);
+  if (S.open && emptied.has(S.open.key)) { S.open = null; S.view = 'gallery'; }
+  R.pl = null;
+  for (const f of gone) { delete S.imgTrack[f]; delete S.labels.images[f]; delete S.preds[f]; S.pend.delete(f); }
+  S.undo = []; render();
 }
 
 /* ---------- menus ---------- */

@@ -171,10 +171,33 @@ def deleted_path(name): return os.path.join(LABELS, safe(name) + ".deleted.json"
 def get_deleted(name): return set(read_json(deleted_path(name), []))
 
 
-def iter_rows(name, csv_path):
+# Images "deleted" in the app are first only *marked* (labels/<name>.pending_delete.json). Nothing leaves the dataset until an
+# export succeeds: that export leaves the marked rows out, then commit_pending() moves them into <name>.deleted.json for good.
+def pending_path(name): return os.path.join(LABELS, safe(name) + ".pending_delete.json")
+
+
+def get_pending(name): return set(read_json(pending_path(name), []))
+
+
+def commit_pending(name):
+    """Make the marked deletions permanent (append to <name>.deleted.json, drop their image labels, clear the marks)."""
+    with lock:
+        pend = get_pending(name)
+        if not pend:
+            return []
+        write_json(deleted_path(name), sorted(get_deleted(name) | pend))
+        write_json(pending_path(name), [])
+        cache.pop(name, None)
+        lab = load_labels(name)
+        if any(lab["images"].pop(f, None) is not None for f in pend):
+            write_json(label_path(name), lab)
+        return sorted(pend)
+
+
+def iter_rows(name, csv_path, also_gone=()):
     """Yield (row, use_tid) for the base CSV, then for rows appended by Merge.
     Images the user deleted in the app (labels/<name>.deleted.json) are skipped; the CSV itself is never edited."""
-    gone = get_deleted(name)
+    gone = get_deleted(name) | set(also_gone)
     for path, use_tid in ((csv_path, False), (extra_path(name), True)):
         if use_tid and not os.path.exists(path):
             continue
@@ -253,7 +276,9 @@ def tagged_name(name): return safe(name) + ".tagged.csv"
 
 
 def write_tagged_csv(name, oh):
+    """Rows marked for deletion are left out of the export (they are removed from the dataset once the export succeeds)."""
     ds = get_dataset(name)
+    pend = get_pending(name)
     lab = load_labels(name)
     tags = {t["id"]: t["name"] for t in get_tags()}
     preds = read_json(pred_path(name), {})
@@ -266,13 +291,13 @@ def write_tagged_csv(name, oh):
     new = ["track_key_sam"] + [x for c in classes for x in (c["column"], c["column"] + "_source", *optcols(c))] + \
           ["tag_rotation", "pred_color", "pred_color_conf", "pred_number", "pred_number_conf"]
     cols = []
-    for r, _ in iter_rows(name, ds["csv"]):        # header union (base columns first)
+    for r, _ in iter_rows(name, ds["csv"], pend):        # header union (base columns first)
         for c in r:
             if c not in cols and c not in new:
                 cols.append(c)
     w = csv.DictWriter(oh, fieldnames=cols + new, extrasaction="ignore")
     w.writeheader()
-    for r, use_tid in iter_rows(name, ds["csv"]):
+    for r, use_tid in iter_rows(name, ds["csv"], pend):
         f = row_fields(r, use_tid)
         if f:
             fn, _, key, _ = f
@@ -740,7 +765,8 @@ class H(BaseHTTPRequestHandler):
                 sample = [t["images"][0]["f"] for t in list(ds["tracks"].values())[:5]]
                 ok = sum(1 for f in sample if resolve_path(ds, f))
                 return self.send(200, {"tracks": [ds["tracks"][k] for k in ds["order"]],
-                                       "labels": load_labels(q["name"]), "probe": [ok, len(sample)]})
+                                       "labels": load_labels(q["name"]), "probe": [ok, len(sample)],
+                                       "pending": sorted(get_pending(q["name"]))})
             if p == "/api/preds":
                 return self.send(200, read_json(pred_path(q["name"]), {}))
             if p == "/api/infer/status":
@@ -817,15 +843,12 @@ class H(BaseHTTPRequestHandler):
                                 del lab[kind][k]
                     write_json(lp, lab)
                 return self.send(200, {"ok": True})
-            if p == "/api/delete_image":
+            if p == "/api/mark_delete":      # {name, fs:[filenames], mark:bool} - mark / unmark images for deletion on export
                 with lock:
-                    gone = get_deleted(b["name"]) | {b["f"]}
-                    write_json(deleted_path(b["name"]), sorted(gone))
-                    cache.pop(b["name"], None)
-                    lab = load_labels(b["name"])
-                    if lab["images"].pop(b["f"], None) is not None:
-                        write_json(label_path(b["name"]), lab)
-                return self.send(200, {"ok": True})
+                    pend = get_pending(b["name"])
+                    pend = pend | set(b["fs"]) if b.get("mark", True) else pend - set(b["fs"])
+                    write_json(pending_path(b["name"]), sorted(pend))
+                return self.send(200, {"pending": sorted(pend)})
             if p == "/api/merge/scan":
                 try: return self.send(200, merge_scan(b["name"], b["path"]))
                 except ValueError as e: return self.send(400, {"error": str(e)})
@@ -839,9 +862,12 @@ class H(BaseHTTPRequestHandler):
                 if b.get("mode") == "download":     # send the CSV to the browser (local machine)
                     buf = io.StringIO(newline="")
                     write_tagged_csv(b["name"], buf)
+                    n = len(commit_pending(b["name"]))
                     return self.send(200, buf.getvalue().encode("utf-8"), "text/csv",
-                                     {"Content-Disposition": 'attachment; filename="%s"' % tagged_name(b["name"])})
-                return self.send(200, {"path": export_csv(b["name"], b.get("dir"))})
+                                     {"Content-Disposition": 'attachment; filename="%s"' % tagged_name(b["name"]),
+                                      "X-Deleted-Count": str(n)})
+                path = export_csv(b["name"], b.get("dir"))
+                return self.send(200, {"path": path, "deleted": commit_pending(b["name"])})
             if p == "/api/purge_tag":
                 n = 0
                 for name in get_datasets():
