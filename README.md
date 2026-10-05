@@ -10,6 +10,8 @@ Click **Open CSV…** and type/browse to a tracks CSV. Images load from its `cro
 Labels autosave to `labels/<dataset>.json`; **Export CSV** writes `labels/<dataset>.tagged.csv` with
 `track_key_sam, tag_color(+_source), tag_number(+_source), tag_rotation, pred_*` columns (rows added by Merge included).
 
+> **Press `?` anywhere in the app (or click the **?** button in the top bar) to see every key bind.** `?` or `Esc` closes the list.
+
 ## Tabs
 - **Tag** – color buttons + numbers 1–100, per track. Select tracks (click / shift / ctrl), then a color button
   (default hotkeys `Q W E R…`; right-click a color button → **Hotkey** to rebind), or type digits + Enter (or number box / Grid). Double-click opens a track; inside, buttons tag the
@@ -71,6 +73,8 @@ You can open several CSVs at any time, also while one is already open. Switch be
 ### 2. A tour of the screen
 
 ![Tag tab overview](docs/img/tag-overview.png)
+
+The top bar stays pinned while you scroll. If it takes too much room, click **▲ Hide** (or press **Shift+H**); a small **▼ Show bar** button stays in the top-right corner to bring it back. The choice is remembered by the browser.
 
 From top to bottom:
 
@@ -154,6 +158,8 @@ While you type, a box appears in the bottom-right corner showing what you are ab
 - **Esc** cancels what you have typed without applying anything.
 - After **Enter**, the app **automatically moves to the next track**, so you can keep typing: `Q12⏎ T7⏎ Y45⏎ …`
 
+> **Tip:** forgot a shortcut? Press **`?`** to open the full list of key binds (it also shows your current color hotkeys). Press `?` or `Esc` to close it.
+
 > **Tip:** the keyboard shortcuts are switched off while a text box (Search, number box…) has the cursor, so you can type normally there. If the shortcuts seem dead, click on an empty part of the page first.
 
 #### Moving to the next track automatically
@@ -174,7 +180,7 @@ Tagging with the keyboard + Enter always moves on to the next track. Nothing mov
 
 - **Name:** rename it (press Enter to confirm).
 - **Color:** choose a different display color.
-- **Hotkey:** click the box, then press the key you want (a letter or symbol; digits are reserved for numbers). **Backspace/Delete** removes the shortcut. If another color already used that key, it loses it.
+- **Hotkey:** click the box, then press the key you want (a letter or symbol; digits are reserved for numbers, and `D` for mark-for-deletion). **Backspace/Delete** removes the shortcut. If another color already used that key, it loses it.
 - **Move left / Move right:** reorder the buttons. This also changes the default shortcuts, which follow the order.
 - **CSV column:** optional. Also export this tag to its own column (`1` if tagged, `0` if not), e.g. `is_red`. Leave empty to only use the shared column. Names must be unique and not reserved.
 - **Delete tag…:** removes the button. You are asked to confirm, and every label using that color is cleared (numbers are kept).
@@ -187,6 +193,10 @@ Tagging with the keyboard + Enter always moves on to the next track. Nothing mov
 - Use the **Number** dropdown to find tracks with or without numbers.
 - Type part of a name in **Search track…**.
 - Use the **size** slider to see more, smaller pictures at once, or fewer, larger ones when numbers are hard to read.
+
+#### Bookmarking a track
+
+To come back to a track later (for example after filtering or scrolling far away), **bookmark** it: select the track and click **🔖 Bookmark** in the top bar, press **Shift+B**, or right-click a card → **Bookmark this track**. The bookmarked card shows a 🔖 badge, and an **↩ <track name>** button appears in the top bar. Click it (or press **Shift+G**) to jump back: the track is selected and scrolled into view. If you bookmarked while **inside** a track, going back reopens that track. If a filter or search is hiding the track, it is cleared automatically. There is one bookmark per dataset (setting a new one replaces it); it is saved in `labels/<dataset>.bookmark.json`.
 
 #### Fixing a mistake
 
@@ -292,13 +302,15 @@ The tab shows a **grid** of every image that already has **both a color and a nu
 | Reset the angle to 0° | Hover, **0** |
 | Remove the saved rotation | Hover, **Delete** |
 | Rotate a whole track | **+90° all** / **rotate all by…** in the section header |
-| More options | **Right-click** a crop: ±90°, mark upright, re-center image, remove saved rotation, **Delete image from dataset…** |
+| More options | **Right-click** a crop: ±90°, mark upright, re-center image, remove saved rotation, **Mark image for deletion** |
 
 Top bar: **▦ Grid** toggles a grid over all crops, the **🔍 slider** zooms the grid (bigger crops, fewer per row), **Re-center all** resets moved images, **only not annotated** hides finished images, **Jump to first unfinished** scrolls to the next one, **📱 Phone view** switches to the touch view below. Grid and zoom settings are remembered by the browser.
 
-#### Deleting an image
+#### Deleting an image (or a whole track)
 
-Right-click an image (in the Rotation grid, the phone view's **🗑 Delete image** button, or inside an opened track) and choose **Delete image from dataset…**. It disappears from the app and from exports. Your CSV and image files are never touched: deleted names are kept in `labels/<dataset>.deleted.json` (remove a name from that file to bring the image back).
+Right-click an image (in the Rotation grid, the phone view's **🗑 Mark for deletion** button, or inside an opened track) and choose **Mark image for deletion**. To mark whole tracks, select them in the gallery and right-click → **Mark N tracks for deletion**. **Keyboard shortcut: press `D`** on the selected track(s), or over a hovered image inside a track / a Rotation crop (press `D` again to unmark, except in the Rotation tab, where marked images are hidden; unmark them from the Tag tab).
+
+Marking is **reversible**: the image stays visible (greyed out, with a 🗑 badge), the top bar counts how many are marked, and right-click → **Unmark** brings it back. Marked images are hidden from the Rotation tab. Nothing is removed from the dataset until you **export**: the export leaves the marked images out of the CSV, and once it succeeds they are removed from the dataset for good. Your CSV and image files are never touched: deleted names are kept in `labels/<dataset>.deleted.json` (remove a name from that file to bring the image back), and pending marks live in `labels/<dataset>.pending_delete.json`.
 
 #### Phone view (touch)
 
@@ -306,7 +318,7 @@ On touch screens or narrow windows the Rotation tab shows **one image at a time*
 
 - **One finger:** rotate around the image centre (saved when you lift the finger).
 - **Two fingers:** drag the image and pinch to zoom (view-only, not saved).
-- Buttons: ⟲90 / ⟲1° / 1°⟳ / 90⟳, Upright 0°, Reset view, ▦ Grid, **Prev / Next**, **🗑 Delete image**, Remove rotation.
+- Buttons: ⟲90 / ⟲1° / 1°⟳ / 90⟳, Upright 0°, Reset view, ▦ Grid, **Prev / Next**, **🗑 Mark for deletion**, Remove rotation.
 - **Fix this image's color** (tag buttons) and **number** (input + Set #); "track color / track #" go back to the track's value.
 
 To use it from a phone on the **same Wi-Fi**, start the server so it listens on the network and open `http://<computer-ip>:8002` on the phone:
@@ -367,9 +379,16 @@ Back up the `labels/` folder to keep your work safe.
 | **Backspace** | Remove the last typed digit (then the color); inside a track with nothing typed: go back |
 | **Esc** | Cancel typing; else close a menu/dialog; else go back from a track; else clear the selection |
 | **Delete** | Remove the color from the selection |
+| **D** | Mark the selected track(s) for deletion (hovered track if none selected); inside a track, the hovered image. Press again to unmark. Reserved: a color hotkey can't be `D` |
 | **A** (Inference tab) | Accept the model's prediction for the selected track(s) |
 | **Ctrl+Z** | Undo |
+| **?** | Show / hide the list of key binds |
+| **Shift+H** | Hide / show the top bar |
+| **Shift+B** / **Shift+G** | **B**ookmark the open / selected / hovered track / **G**o back to the bookmark |
+| **Space** or **Shift+P** (hover a track card) | Play the track's images as a quick animation (a bar shows loading, then position); press again, **Esc**, or leave the card to stop |
 | Right-click a card / color button / image | Tag menu / edit color button / tag one image |
+| **Shift+M** (or the **Menu** key / **Shift+F10**) | Open the right-click menu of whatever is under the mouse |
+| **↑ ↓ Home End PageUp PageDown**, **Enter** (menu open) | Move through a context menu's options and pick one (long menus also have ▲ ▼ buttons) |
 
 **Rotation tab:** see the table in [section 8](#8-rotation-tab-record-which-way-is-up).
 

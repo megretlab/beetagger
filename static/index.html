@@ -7,8 +7,12 @@
 <style>
 :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#2a2f3a;--text:#e7e9ee;--dim:#8b91a0;--accent:#6c8cff;--radius:10px}
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 button,select,input{font:inherit;color:inherit}
+html{scroll-padding-top:var(--hdr,0px)}   /* keep scrollIntoView targets out from under the pinned bar */
+header.hidden{display:none}
+#showBar{display:none;position:fixed;top:8px;right:12px;z-index:25;opacity:.85;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+body.nobar #showBar{display:inline-block}
 header{position:sticky;top:0;z-index:20;background:rgba(15,17,21,.94);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .row{display:flex;align-items:center;gap:10px;padding:9px 16px;flex-wrap:wrap}
 .row+.row{border-top:1px solid var(--line)}
@@ -70,13 +74,19 @@ main{padding:16px}
 .card .nb{position:absolute;top:10px;left:6px;font-size:15px;padding:1px 8px}
 .card.override{border-style:dashed;border-color:var(--c)}
 .card.pdel{border-style:dashed;border-color:#e5484d}.card.pdel .im{opacity:.35;filter:grayscale(1)}
+.bmk{position:absolute;top:32px;right:6px;background:rgba(0,0,0,.6);border-radius:6px;padding:0 5px;font-size:12px}
+.card.flash{animation:bmflash 1.4s ease-out}
+@keyframes bmflash{0%,40%{box-shadow:0 0 0 4px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
 .badge.del{background:#e5484d;color:#fff}
 .badge{position:absolute;bottom:64px;left:6px;padding:1px 7px;border-radius:999px;background:var(--accent);color:#0b0d14;font-size:11px;font-weight:700}
 .empty{padding:60px;text-align:center;color:var(--dim);grid-column:1/-1}
-.menu{position:fixed;z-index:100;min-width:210px;max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 40px rgba(0,0,0,.55)}
+.menu{position:fixed;z-index:100;min-width:210px;max-height:90vh;max-height:calc(100dvh - 16px);overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 40px rgba(0,0,0,.55)}
 .menu .h{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
 .menu .it{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;cursor:pointer}
-.menu .it:hover{background:var(--panel2)}
+.menu .it:hover,.menu .it.kb{background:var(--panel2)}.menu .it.kb{outline:1px solid var(--accent)}
+.menu{scroll-padding:4px 0 56px}
+.menu .msc{position:sticky;bottom:-6px;display:flex;gap:6px;justify-content:center;padding:6px 0 2px;margin-top:4px;background:var(--panel);border-top:1px solid var(--line)}
+.menu .msc button{flex:1;font-size:15px;padding:6px 0;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;cursor:pointer}
 .menu .it .dot{width:12px;height:12px;border-radius:50%;background:var(--c)}
 .menu .it.danger{color:#ff7b80}
 .menu hr{border:0;border-top:1px solid var(--line);margin:5px 0}
@@ -127,7 +137,7 @@ svg text{fill:var(--dim);font-size:10px}
 .bad{border-color:#e5484d !important}.okc{color:#30a46c}.warnc{color:#ff9b52}
 .res{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
 .res .tile b{font-size:22px}
-.rbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:6px 2px 10px;position:sticky;top:0;background:var(--bg);z-index:5}
+.rbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:6px 2px 10px;position:sticky;top:var(--hdr,0px);background:var(--bg);z-index:5}
 .rprog{font-weight:700}
 .rsec h3{display:flex;align-items:center;gap:10px;font-size:14px;margin:16px 2px 8px}
 .rsec.done h3{opacity:.45}.rsec .rp{font-style:normal;color:var(--accent);font-size:12px}
@@ -192,6 +202,9 @@ svg .bar{cursor:pointer}
     <div class="spacer"></div>
     <span id="stats" class="dim" style="font-size:12px"></span>
     <div class="progress"><div id="prog"></div></div>
+    <button class="btn ghost" id="bmSet" title="Bookmark the open / selected / hovered track (Shift+B)">🔖 Bookmark</button>
+    <button class="btn ghost" id="bmGo" title="Go back to the bookmarked track (Shift+G)" style="display:none">↩ <span id="bmName"></span></button>
+    <button class="btn ghost sm" id="hideBar" title="Hide the top bar (Shift+H to bring it back)">▲ Hide</button>
     <button class="btn" id="undoBtn" title="Ctrl+Z">Undo</button>
     <button class="btn ghost" id="helpBtn" title="Key binds (?)">?</button>
     <button class="btn primary" id="exportBtn" title="Export a CSV copy with tag columns (to a server directory or your computer)">Export CSV</button>
@@ -225,11 +238,12 @@ svg .bar{cursor:pointer}
   <div id="merge" style="display:none"></div>
   <div id="rot" style="display:none"></div>
 </main>
+<button class="btn primary sm" id="showBar" title="Show the top bar (Shift+H)">▼ Show bar</button>
 <div id="toast"></div><div id="numbuf"></div>
 
 <script>
 const $ = s => document.querySelector(s);
-const S = { ds:null, pend:new Set(), tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{}, tp:{}, imgTrack:{},
+const S = { ds:null, pend:new Set(), bm:null, tracks:[], tags:[], labels:{tracks:{},images:{}}, preds:{}, tp:{}, imgTrack:{},
   tab:'tag', view:'gallery', open:null, sel:new Set(), anchor:null, fc:'all', fn:{mode:'any',val:null}, q:'',
   undo:[], visible:[], inf:{filter:'review', thr:100, sort:'conf', job:null},
   dist:{unit:'images', colors:new Set(), nlo:null, nhi:null},
@@ -240,7 +254,7 @@ const KEYS = ['q','w','e','r','t','y','u','i','o','p'];
 // hotkey per tag: explicit t.key ('' = none) wins; otherwise the default for its position, unless another tag took that key
 function tagKeys(){
   const m = {}, used = new Set(S.tags.map(t => t.key).filter(Boolean));
-  S.tags.forEach((t, i) => { m[t.id] = t.key !== undefined ? t.key : (i < KEYS.length && !used.has(KEYS[i]) ? KEYS[i] : ''); });
+  S.tags.forEach((t, i) => { m[t.id] = t.key !== undefined ? t.key : (i < KEYS.length && !used.has(KEYS[i]) ? KEYS[i] : ''); if (m[t.id] === 'd') m[t.id] = ''; });   // D is reserved: mark for deletion
   return m;
 }
 const imgUrl = f => `/api/img?name=${encodeURIComponent(S.ds)}&f=${encodeURIComponent(f)}`;
@@ -272,9 +286,9 @@ async function loadDataset(name){
   $('#content').innerHTML = '<div class="empty">Loading…</div>';
   try {
     const d = await api('/api/dataset?name=' + encodeURIComponent(name));
-    S.tracks = d.tracks; S.labels = d.labels; S.pend = new Set(d.pending || []); S.undo = []; R.built = false;
+    S.tracks = d.tracks; S.labels = d.labels; S.pend = new Set(d.pending || []); S.bm = d.bookmark || null; S.undo = []; R.built = false;
     S.imgTrack = {}; for (const t of S.tracks) for (const im of t.images) S.imgTrack[im.f] = t.key;
-    S.preds = await api('/api/preds?name=' + encodeURIComponent(name)); computeTP();
+    S.preds = await api('/api/preds?name=' + encodeURIComponent(name)); computeTP(); renderBm();
     S.sel.clear(); S.view = 'gallery'; S.open = null; S.anchor = null; S.thumb.at = {};
     if (d.probe[1] && !d.probe[0]) toast("Couldn't find images at the CSV's crop_filepath (or ./crops/) — check the paths");
   } catch(e){ S.tracks = []; toast('Load failed: ' + e.message); }
@@ -554,7 +568,7 @@ function renderGallery(){
       <div class="bar"></div>${nd ? `<div class="badge del">🗑 ${nd === t.images.length ? 'track marked for deletion' : nd + ' image' + (nd>1?'s':'') + ' marked'}</div>` : ''}
       <img class="im" loading="lazy" decoding="async" src="${imgUrl(mid.f)}" draggable="false">
       <div class="nb num ${l.n?'':'empty'}" style="${l.n && clsOn('n')?'':'display:none'}">${l.n||''}</div>
-      <div class="idx">${ti+1}/${t.images.length}</div>
+      <div class="idx">${ti+1}/${t.images.length}</div>${S.bm?.key === t.key ? '<div class="bmk" title="Bookmarked (Shift+G to come back)">🔖</div>' : ''}
       <div class="meta"><span title="${esc(t.key)}">${esc(t.key.replace(/^.*\.mp4\./,'').replace(/^capture-/,'…'))}${n?` · <b style="color:var(--accent)">${n} ovr</b>`:''}</span>${clsOn('c') ? pill(l.c) : ''}</div>
       ${xLine(id => l[id])}${S.tab==='inference' ? predLine(S.tp[t.key], l) : ''}</div>`;
   }).join('');
@@ -760,7 +774,7 @@ $('#content').addEventListener('contextmenu', e => {
     {label:'Clear color', fn:() => setColor(null)}, {label:'Clear number', fn:() => setNumber(null)},
     ...classItems((id, v) => setField(id, v)),
     {label:'Accept model prediction', fn:() => acceptKeys([...S.sel]), skip:S.tab !== 'inference'},
-    {label:'Open track', fn:() => openTrack(k)}, 'hr',
+    {label:'Open track', fn:() => openTrack(k)}, {label:'Bookmark this track', fn:() => setBookmark(k)}, 'hr',
     ...(() => { const fs = [...S.sel].flatMap(k => S.tracks.find(t => t.key === k)?.images.map(im => im.f) || []), un = fs.length && fs.every(f => S.pend.has(f));
       return [{label:un ? `Unmark ${S.sel.size} track${S.sel.size>1?'s':''} for deletion` : `Mark ${S.sel.size} track${S.sel.size>1?'s':''} for deletion`, danger:true, fn:() => markDelete(fs, !un)}]; })()]);
 });
@@ -825,6 +839,54 @@ $('#openBtn').addEventListener('click', () => openModal());
 $('#forgetBtn').addEventListener('click', async () => { if (S.ds && confirm(`Remove "${S.ds}" from the list? (labels and CSV files are kept)`)) { await api('/api/forget', {name:S.ds}); localStorage.removeItem('ds'); refreshDatasets(); } });
 $('#backBtn').addEventListener('click', back);
 $('#undoBtn').addEventListener('click', undo);
+/* ---------- bookmark: remember a track and jump back to it ---------- */
+// Shift+B (or 🔖) bookmarks the open track, else the selected one, else the hovered card; Shift+G (or ↩) returns to it.
+// Bookmarked from inside a track -> returns inside that track; from the gallery -> selects it and scrolls it into view. Stored per dataset on the server.
+const bmShort = k => k.replace(/^.*\.mp4\./, '').replace(/^capture-/, '…');
+function renderBm(){
+  const t = S.ds && S.bm && S.tracks.find(x => x.key === S.bm.key);
+  $('#bmGo').style.display = t ? '' : 'none'; if (t) { $('#bmName').textContent = bmShort(S.bm.key).slice(-18); $('#bmGo').title = `Go back to ${S.bm.key} (Shift+G)`; }
+}
+function bmTarget(){
+  if (S.view === 'track') return S.open?.key;
+  return (S.sel.size ? (S.sel.has(S.anchor) ? S.anchor : [...S.sel][0]) : null) || document.querySelector('#content .card[data-k]:hover')?.dataset.k;
+}
+async function setBookmark(key = bmTarget()){
+  if (!S.ds) return;
+  if (!key) return toast('Select (or hover) a track first, then bookmark it');
+  const bm = {key, inTrack: S.view === 'track'};
+  try { await api('/api/bookmark', {name:S.ds, ...bm}); } catch(e){ return toast('Bookmark failed: ' + e.message); }
+  S.bm = bm; renderBm(); if (S.view === 'gallery' && (S.tab === 'tag' || S.tab === 'inference')) render(); toast(`🔖 Bookmarked ${bmShort(key)}${bm.inTrack ? ' (inside the track)' : ''} · Shift+G to return`);
+}
+function gotoBookmark(){
+  const bm = S.bm; if (!bm) return toast('No bookmark yet: Shift+B sets one');
+  const t = S.tracks.find(x => x.key === bm.key); if (!t) return toast('The bookmarked track is no longer in this dataset');
+  if (S.tab !== 'tag' && S.tab !== 'inference') setTab('tag');
+  S.view = 'gallery'; S.open = null;
+  if (!visibleTracks().some(x => x.key === bm.key)) {   // a filter/search is hiding it: relax them just enough
+    if (S.tab === 'inference') { S.inf.filter = S.tp[bm.key] ? 'all' : 'none'; S.inf.thr = 100; $('#thr').value = 100; $('#thrV').textContent = '100%'; }
+    else { S.fc = 'all'; S.q = ''; $('#search').value = ''; S.fn = {mode:'any', val:null}; $('#fnMode').value = 'any'; $('#fnVal').style.display = 'none'; S.xf = {}; }
+    toast('Filters cleared to show the bookmarked track');
+  }
+  S.sel = new Set([bm.key]); S.anchor = bm.key; render();
+  const c = [...document.querySelectorAll('#content .card[data-k]')].find(el => el.dataset.k === bm.key);
+  if (c) { c.scrollIntoView({block:'center'}); c.classList.add('flash'); }
+  if (bm.inTrack) openTrack(bm.key);
+}
+$('#bmSet').addEventListener('click', () => setBookmark());
+$('#bmGo').addEventListener('click', gotoBookmark);
+
+// top bar stays pinned while scrolling; ▲ Hide / Shift+H tucks it away (remembered), ▼ Show bar brings it back
+function setBar(show){
+  $('header').classList.toggle('hidden', !show); document.body.classList.toggle('nobar', !show);
+  try { localStorage.setItem('hideBar', show ? '0' : '1'); } catch(_){}
+  syncHdr();
+}
+const syncHdr = () => document.documentElement.style.setProperty('--hdr', ($('header').classList.contains('hidden') ? 0 : $('header').offsetHeight) + 'px');
+new ResizeObserver(syncHdr).observe($('header'));
+$('#hideBar').addEventListener('click', () => setBar(false));
+$('#showBar').addEventListener('click', () => setBar(true));
+try { if (localStorage.getItem('hideBar') === '1') setBar(false); } catch(_){}
 $('#helpBtn').addEventListener('click', () => helpEl ? closeHelp() : openHelp());
 $('#exportBtn').addEventListener('click', () => { if (S.ds) openExportModal(); });
 function openExportModal(){
@@ -939,11 +1001,15 @@ document.addEventListener('keydown', e => {
   if (e.target.matches('input:not([type=range]),select,textarea')) return;
   if (helpEl) { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); closeHelp(); } return; }
   if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); return openHelp(); }
+  if (e.key === 'H' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); return setBar($('header').classList.contains('hidden')); }
+  { const m = document.querySelector('.menu'); if (m && menuKey(e, m)) return; }
   if (S.tab === 'dist' || S.tab === 'merge' || !S.ds) return;
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'B' || e.key === 'G')) { e.preventDefault(); return e.key === 'B' ? setBookmark() : gotoBookmark(); }
   if ((e.ctrlKey||e.metaKey) && e.key === 'z') { e.preventDefault(); return undo(); }
   if (isMenuKey(e)) { e.preventDefault(); return keyMenu(); }
   if (S.tab === 'rot') return rotKey(e);
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.toLowerCase() === 'd' && !e.shiftKey) { e.preventDefault(); return deleteKey(); }
   if (e.key === ' ' || (e.key === 'P' && e.shiftKey)) {   // Space is always swallowed here so the page never scrolls; Shift+P is the alternative play key
     e.preventDefault();
     const c = S.view === 'gallery' && document.querySelector('#content .card:hover'); if (c) toggleAnim(c); return;
@@ -1021,19 +1087,22 @@ function openHelp(){
   const tk = tagKeys(), tagRows = S.tags.filter(t => tk[t.id]).map(t => `<kbd>${esc(tk[t.id].toUpperCase())}</kbd> <span style="color:${t.color === '#f0f0f0' ? '#888' : t.color}">● ${esc(t.name)}</span>`).join(' &nbsp; ');
   helpEl = document.createElement('div'); helpEl.className = 'modal';
   helpEl.innerHTML = `<div class="help"><div style="display:flex;align-items:center"><b>Key binds</b><div class="spacer"></div><span class="dim">${K('?')} or ${K('Esc')} to close</span></div>`
-    + sec('Everywhere', [[K('?'), 'Show / hide this list'], [K('Ctrl') + '+' + K('Z'), 'Undo'],
+    + sec('Everywhere', [[K('?'), 'Show / hide this list'], [K('Ctrl') + '+' + K('Z'), 'Undo'], [K('Shift') + '+' + K('H'), 'Hide / show the top bar (it stays pinned while you scroll)'],
+      [K('Shift') + '+' + K('B'), '<b>Bookmark</b> the open / selected / hovered track'], [K('Shift') + '+' + K('G'), '<b>Go</b> back to the bookmarked track (reopens it if you bookmarked from inside a track)'],
+      [K('↑') + K('↓') + ' ' + K('Enter'), 'In an open menu: move through the options (a long menu scrolls to follow) and pick one; ' + K('Esc') + ' closes it'],
       [K('Shift') + '+' + K('M'), 'Open the <b>right-click menu</b> of whatever is under the mouse (track, image, tag button, rotation crop) — also the ' + K('Menu') + ' key / ' + K('Shift') + '+' + K('F10')]])
     + sec('Tag &amp; Inference — gallery', [
       [K('Space') + ' / ' + K('Shift') + '+' + K('P'), 'Hover a track and press to <b>play its images as an animation</b> (press again, Esc, or leave the card to stop)'],
       [K('←') + K('→') + K('↑') + K('↓'), 'Move the selection'], [K('Enter'), 'Open the selected track (or apply a pending tag)'],
       [K('Shift') + '+scroll', 'Flip through a track\'s images under the mouse'], [K('Shift') + '+click', 'Select a range'], [K('Ctrl') + '+click', 'Add / remove from selection'],
-      [K('A'), 'Accept the model prediction for the selection (Inference tab)'], [K('Esc'), 'Cancel pending tag / close menu / clear selection'], ['double-click', 'Open a track'], ['right-click', 'Menu for a track']])
+      [K('A'), 'Accept the model prediction for the selection (Inference tab)'],
+      [K('D'), '<b>Mark for deletion</b> the selected tracks (or the hovered one); inside a track, the hovered image. Press again to unmark. Nothing is removed until you export'], [K('Esc'), 'Cancel pending tag / close menu / clear selection'], ['double-click', 'Open a track'], ['right-click', 'Menu for a track']])
     + sec('Tagging', [
       [tagRows || '<span class="dim">no tag hotkeys</span>', 'Color-tag hotkeys (change them in a tag\'s right-click menu)'],
       [K('0') + '–' + K('9'), 'Type a number (up to 3 digits)'], [K('Enter'), 'Apply the pending color + number to the selection'],
       [K('Backspace'), 'Erase the last pending digit / pending color'], [K('Delete'), 'Clear the color of the selection']])
     + sec('Inside a track', [[K('Backspace') + ' / ' + K('Esc'), 'Back to the track list'], ['right-click an image', 'Tag just that image']])
-    + sec('Rotation tab (hover an image)', [[K('←') + K('→'), 'Rotate ±5°'], [K('Shift') + '+' + K('←') + K('→'), 'Rotate ±1°'], [K('0'), 'Reset to upright'], [K('Delete'), 'Remove the saved rotation'],
+    + sec('Rotation tab (hover an image)', [[K('←') + K('→'), 'Rotate ±5°'], [K('Shift') + '+' + K('←') + K('→'), 'Rotate ±1°'], [K('0'), 'Reset to upright'], [K('Delete'), 'Remove the saved rotation'], [K('D'), 'Mark the image for deletion'],
       ['drag / click', 'Free-rotate / +90°'], [K('Shift') + '+drag', 'Move the image (not saved)']])
     + `<button class="btn" id="helpClose" style="margin-top:12px">Close</button></div>`;
   document.body.appendChild(helpEl);
@@ -1235,6 +1304,10 @@ $('#rot').addEventListener('contextmenu', e => {
 });
 function rotKey(e){
   if (e.metaKey || e.altKey || e.ctrlKey) return;
+  if (e.key.toLowerCase() === 'd' && !e.shiftKey) {   // D: mark the hovered crop (or the phone view's current image) for deletion
+    e.preventDefault(); const f = R.phone ? PH.f : (R.hov?.isConnected ? R.hov.dataset.f : null);
+    return f ? markDelete([f], true) : toast('Hover a crop first');
+  }
   const c = R.hov; if (!c || !c.isConnected) return;
   const step = e.shiftKey ? 1 : 5;
   if (e.key === 'ArrowLeft') { e.preventDefault(); rotSet(c, curA(c) - step); rotHud(c); }
@@ -1359,6 +1432,17 @@ async function markDelete(fs, mark){
   if (R.pl) R.pl = R.pl.filter(x => !S.pend.has(x.f));
   render(); toast(mark ? `Marked ${fs.length} image${fs.length>1?'s':''} for deletion — removed after you export (undo: right-click → Unmark)` : `Unmarked ${fs.length} image${fs.length>1?'s':''}`);
 }
+// D key: toggles the mark on the selected tracks (or the hovered track), or on the hovered image when inside a track
+function deleteKey(){
+  if (S.view === 'track') {
+    const c = document.querySelector('#content .card[data-f]:hover'); if (!c) return toast('Hover an image to mark it (or go back and select tracks)');
+    return markDelete([c.dataset.f], !S.pend.has(c.dataset.f));
+  }
+  const keys = S.sel.size ? [...S.sel] : [document.querySelector('#content .card[data-k]:hover')?.dataset.k].filter(Boolean);
+  if (!keys.length) return toast('Select (or hover) a track first');
+  const fs = keys.flatMap(k => S.tracks.find(t => t.key === k)?.images.map(im => im.f) || []);
+  markDelete(fs, !fs.every(f => S.pend.has(f)));
+}
 // after an export the server has permanently removed the marked images: drop them from the loaded dataset too
 function purgeLocal(fs){
   const gone = new Set(fs);
@@ -1373,11 +1457,34 @@ function purgeLocal(fs){
 }
 
 /* ---------- menus ---------- */
+// keyboard control for an open menu: ↑/↓ (Home/End, PageUp/PageDown) move the highlight and scroll it into view, Enter picks it
+function menuKey(e, m){
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  const items = [...m.querySelectorAll('.it')]; if (!items.length) return false;
+  let i = items.findIndex(x => x.classList.contains('kb'));
+  const go = j => { items[i]?.classList.remove('kb'); i = Math.max(0, Math.min(items.length - 1, j)); items[i].classList.add('kb'); items[i].scrollIntoView({block:'nearest'}); if (i === 0) m.scrollTop = 0; };
+  switch (e.key) {
+    case 'ArrowDown': e.preventDefault(); go(i + 1); return true;
+    case 'ArrowUp': e.preventDefault(); go(i < 0 ? items.length - 1 : i - 1); return true;
+    case 'PageDown': e.preventDefault(); go(i + 6); return true;
+    case 'PageUp': e.preventDefault(); go(i < 0 ? 0 : i - 6); return true;
+    case 'Home': e.preventDefault(); go(0); return true;
+    case 'End': e.preventDefault(); go(items.length - 1); return true;
+    case 'Enter': if (i < 0) return false; e.preventDefault(); items[i].click(); return true;
+  }
+  return false;
+}
 function closeMenu(){ document.querySelectorAll('.menu').forEach(m => m.remove()); }
 document.addEventListener('mousedown', e => { if (!e.target.closest('.menu') && !e.target.closest('[data-numgrid]')) closeMenu(); });
-window.addEventListener('scroll', closeMenu, {passive:true});
 function placeMenu(m, x, y){
   document.body.appendChild(m);
+  m.style.maxHeight = (innerHeight - 16) + 'px';   // innerHeight = what is really visible (iPad toolbars make 100vh too tall); the menu scrolls inside this
+  if (m.scrollHeight > m.clientHeight + 1) {         // too tall for the screen: ▲▼ buttons (tap-friendly) next to wheel / touch / arrow-key scrolling
+    const b = document.createElement('div'); b.className = 'msc'; b.innerHTML = '<button type="button" title="Scroll up">▲</button><button type="button" title="Scroll down">▼</button>';
+    b.children[0].onclick = () => m.scrollBy({top:-m.clientHeight * .7, behavior:'smooth'});
+    b.children[1].onclick = () => m.scrollBy({top: m.clientHeight * .7, behavior:'smooth'});
+    m.appendChild(b);
+  }
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 8)) + 'px';
   m.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 8)) + 'px';
@@ -1494,6 +1601,7 @@ function editTagMenu(x, y, t){
     if (e.key === 'Backspace' || e.key === 'Delete') k = '';
     else if (e.key.length !== 1 || /[0-9\s]/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return toast('Use a single letter/symbol key (digits are for numbers)');
     else k = e.key.toLowerCase();
+    if (k === 'd') return toast('D is reserved: it marks the selection for deletion');
     if (k) { const o = S.tags.find(x => x !== t && tagKeys()[x.id] === k); if (o) o.key = ''; }
     t.key = k; closeMenu(); saveTags();
   };

@@ -176,6 +176,10 @@ def get_deleted(name): return set(read_json(deleted_path(name), []))
 def pending_path(name): return os.path.join(LABELS, safe(name) + ".pending_delete.json")
 
 
+# One bookmark per dataset ("go back to the track I was on"): {"key": track key, "inTrack": opened-track view or gallery}
+def bookmark_path(name): return os.path.join(LABELS, safe(name) + ".bookmark.json")
+
+
 def get_pending(name): return set(read_json(pending_path(name), []))
 
 
@@ -766,7 +770,8 @@ class H(BaseHTTPRequestHandler):
                 ok = sum(1 for f in sample if resolve_path(ds, f))
                 return self.send(200, {"tracks": [ds["tracks"][k] for k in ds["order"]],
                                        "labels": load_labels(q["name"]), "probe": [ok, len(sample)],
-                                       "pending": sorted(get_pending(q["name"]))})
+                                       "pending": sorted(get_pending(q["name"])),
+                                       "bookmark": read_json(bookmark_path(q["name"]), None)})
             if p == "/api/preds":
                 return self.send(200, read_json(pred_path(q["name"]), {}))
             if p == "/api/infer/status":
@@ -843,6 +848,10 @@ class H(BaseHTTPRequestHandler):
                                 del lab[kind][k]
                     write_json(lp, lab)
                 return self.send(200, {"ok": True})
+            if p == "/api/bookmark":         # {name, key, inTrack} sets the bookmark; key null clears it
+                bm = {"key": b["key"], "inTrack": bool(b.get("inTrack"))} if b.get("key") else None
+                write_json(bookmark_path(b["name"]), bm)
+                return self.send(200, {"bookmark": bm})
             if p == "/api/mark_delete":      # {name, fs:[filenames], mark:bool} - mark / unmark images for deletion on export
                 with lock:
                     pend = get_pending(b["name"])
